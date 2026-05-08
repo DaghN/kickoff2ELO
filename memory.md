@@ -15,6 +15,15 @@ Working log for decisions, parameters, and next steps. Updated as the project ev
 - **ELO (implemented):** Simple win/draw/loss only (“classic” fractional scores 1 / ½ / 0); base rating **1600**, symmetric **K = 32**; no goal-difference modifier in v1. New-player / provisional handling intentionally deferred (“everyone starts at `BASE_RATING` until games move them”).
 - **Engineering:** Clear layout, git from day one, maintain this file, keep code readable and easy to tune parameters later.
 
+## Long-term arc (product context)
+
+This repository is intentionally a **personal sandbox and proof of concept**, not the production community stack.
+
+- **Near term:** Play with **Elo policy** (new players, provisional ratings, \(K\), etc.) and prove **richer UX ideas**—for example individual **rating-over-time** charts—using **`elo_*`** snapshots and straightforward SQL. **Streamlit** is the main way to **see and tweak results for yourself**; it reads **`data/retro_elo.sqlite3` directly**. No separate “export pipeline” is required for that.
+- **Stage 3 (CSV / flat-file exports):** **Deferred and on-demand only**—useful if you ever want a leaderboard file for email/Discord or a collaborator who won’t touch SQLite. **Not a prerequisite for Streamlit** and not on the critical path unless a concrete need appears.
+- **Long term:** **Integrate with the community’s main app and website**, owned/maintained by **another developer**. Plan on **redoing much of the presentation and hosting** (their stack, auth, deploy, styling). What should carry over across that boundary: **rating rules**, **data shape / schema lessons**, **queries**, and **validated product ideas**—not necessarily Streamlit or this folder layout as-is.
+- **Roles (current assumption):** You act as **PoC / experiments** now; you may later **own a corner** of the public site; **integration** stays a joint effort with the primary maintainer.
+
 ## Source file schema (`retro_results.json`)
 
 Single JSON array. Each object (verified on sample):
@@ -58,15 +67,16 @@ CLI overrides (`compute_elo --base`, `--k`) replay the ladder without touching `
 
 1. **Stage 1 — Import & schema:** DONE — DDL in `schema.sql`; loader `import_matches.py`. Games sorted by `StartTime`, then `game_id`; invalid self-matches (`PlayerA == PlayerB`) are skipped (`self_matches_skipped` in summary).
 2. **Stage 2 — ELO core:** DONE — `compute_elo` replays chronologically (`ORDER BY start_time, game_id`); persists `players.rating` plus per-game snapshots on `games` (`elo_*` columns); `elo_core.py` isolates maths; migrations patch legacy DB files created before these columns existed.
-3. **Stage 3 — CLI / exports (optional):** CSV exports, richer audit helpers, notebooks.
-4. **Stage 4 — Streamlit:** Rankings explorer, filters, sliders bound to `--base/--k`-style experimentation.
+3. **Stage 3 — Exports (deferred / on-demand):** Flat files (e.g. CSV) **only if** a concrete sharing or tooling need shows up. **Skip by default** — Streamlit and experiments do **not** depend on this.
+4. **Stage 4 — Streamlit (next):** Self-facing exploration: rankings, parameter controls, per-player history charts, etc., all backed by the existing SQLite DB.
 
 ## Status
 
 - [x] Project skeleton, git, `.gitignore`, `memory.md`, staging plan documented.
 - [x] Stage 1: JSON → SQLite import (`data/retro_elo.sqlite3`).
 - [x] Stage 2: Elo recomputation (`python -m kool_elo.compute_elo`).
-- [ ] Stage 3+: exports / dashboards as needed.
+- [ ] Stage 4: Streamlit dashboard (next focus).
+- [ ] Stage 3: only if/when file exports are actually needed.
 
 ## Database schema (SQLite)
 
@@ -149,9 +159,12 @@ Replay is deterministic and **idempotent**: running it twice with identical inpu
 | 2026-05-09 | Document *vibecoding*: user drives requirements via chat—not manual repo ops. |
 | 2026-05-09 | Stage 2: store per-game snapshots directly on `games` for reproducibility (`elo_*`). |
 | 2026-05-09 | Stage 2: `schema_migrations.py` preserves compatibility with SQLite files minted during Stage‑1‑only DDL. |
+| 2026-05-10 | **Roadmap:** Treat **Stage 3 exports as deferred**; **Streamlit next** for self-facing exploration (queries SQLite directly—no CSV stage required). |
+| 2026-05-10 | **Long-term:** This repo is **PoC / sandbox**; production will likely **integrate with the community maintainer’s app**—expect UI/hosting rework; preserve **rules, schema, queries, and UX ideas** across the handoff. |
 
 ## Next steps
 
-1. Stage 3 niceties — export ranked CSV/HTML, matchup history drill-downs without Streamlit overhead.
-2. Stage 4 Streamlit UX — leaderboard tab, filters, plotting rating evolution using stored `elo_*` columns / joins.
-3. Optional future mechanics — provisional ratings, separate home/away, goal-sensitive K/FIDE-style caps, richer new-player onboarding.
+1. **Streamlit MVP** — wire to SQLite: leaderboard, basic filters, knobs for `BASE`/`K` (or documented “re-run `compute_elo`” flow where needed), starter **rating history** plots from `elo_*` / joins.
+2. **Elo experiments** — new-player / provisional rules, iterating in `elo_core` + replay + dashboard feedback.
+3. **Exports (optional)** — only if a real need appears (sharing, external tools); otherwise skip.
+4. **Integration prep (later)** — document schema and rules for handoff to the main community codebase; expect reimplementation there.
