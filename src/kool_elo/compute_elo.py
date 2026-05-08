@@ -141,12 +141,18 @@ def rebuild_elo(
 
         payload = []
         for pid in ratings:
+            games_total = games_played[pid]
+            pr = peak_rating[pid]
+            pw = peak_when[pid]
+            if games_total < PROVISIONAL_GAMES_FULL_THRESHOLD:
+                pr = None
+                pw = None
             payload.append(
                 (
                     ratings[pid],
-                    games_played[pid],
-                    peak_rating[pid],
-                    peak_when[pid],
+                    games_total,
+                    pr,
+                    pw,
                     pid,
                 )
             )

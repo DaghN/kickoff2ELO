@@ -258,6 +258,10 @@ def main() -> None:
 
     with board_tab:
         st.subheader("Rankings")
+        st.caption(
+            f"Peak stays **—** until **{PROVISIONAL_GAMES_FULL_THRESHOLD}** completed matches; provisional "
+            "current ratings append **`?`**."
+        )
         query = st.text_input("Filter by name (substring, case-insensitive)", value="")
 
         filtered = players_df
@@ -271,9 +275,21 @@ def main() -> None:
                 _rating_display_value(float(rating), int(games))
                 for rating, games in zip(filtered["rating"], filtered["games_played"])
             ],
-            peak_display=[_peak_rating_text(row) for row in filtered["peak_rating"]],
+            peak_display=[
+                (
+                    _peak_rating_text(pk)
+                    if int(gp) >= PROVISIONAL_GAMES_FULL_THRESHOLD
+                    else "—"
+                )
+                for pk, gp in zip(filtered["peak_rating"], filtered["games_played"])
+            ],
             peak_recorded=[
-                _peak_time_text(row) for row in filtered["peak_rating_at"]
+                (
+                    _peak_time_text(pw)
+                    if int(gp) >= PROVISIONAL_GAMES_FULL_THRESHOLD
+                    else "—"
+                )
+                for pw, gp in zip(filtered["peak_rating_at"], filtered["games_played"])
             ],
         ).rename(columns={"games_played": "games"})
         cols = ["display_name", "games", "elo_display", "peak_display", "peak_recorded"]
