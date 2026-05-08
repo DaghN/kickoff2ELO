@@ -25,7 +25,12 @@ def rebuild_elo(
     Full recompute stored in SQLite.
 
     Returns ``(games_processed, final_ratings, final_games_played)``.
+
+    Peak ladders ignore each player's outcomes until *that* player's cumulative
+    games reach ``PROVISIONAL_GAMES_FULL_THRESHOLD``—only afterward do we accumulate
+    ``peak_rating`` / ``peak_rating_at`` for them.
     """
+
 
     keys = [str(row[0]) for row in conn.execute("SELECT player_id FROM players").fetchall()]
 
@@ -122,8 +127,10 @@ def rebuild_elo(
             games_played[pid_a] = na + 1
             games_played[pid_b] = nb + 1
 
-            update_peak(pid_a, ra_new, start_ts)
-            update_peak(pid_b, rb_new, start_ts)
+            if games_played[pid_a] >= PROVISIONAL_GAMES_FULL_THRESHOLD:
+                update_peak(pid_a, ra_new, start_ts)
+            if games_played[pid_b] >= PROVISIONAL_GAMES_FULL_THRESHOLD:
+                update_peak(pid_b, rb_new, start_ts)
 
             processed += 1
 
