@@ -54,8 +54,21 @@ def ensure_provisional_columns(conn: sqlite3.Connection) -> None:
             conn.execute(ddl)
 
 
+def ensure_peak_tracking_columns(conn: sqlite3.Connection) -> None:
+    """Peak rating bookkeeping (replay recomputes these fields)."""
+
+    cols = _table_columns(conn, "players")
+    if "peak_rating" not in cols:
+        conn.execute("ALTER TABLE players ADD COLUMN peak_rating REAL;")
+    if "peak_rating_at" not in cols:
+        conn.execute(
+            "ALTER TABLE players ADD COLUMN peak_rating_at TEXT;"
+        )
+
+
 def ensure_elo_schema(conn: sqlite3.Connection) -> None:
     """Convenience rollup for tools that mutate ratings."""
 
     ensure_stage2_rating_columns(conn)
     ensure_provisional_columns(conn)
+    ensure_peak_tracking_columns(conn)

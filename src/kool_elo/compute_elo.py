@@ -31,6 +31,8 @@ def rebuild_elo(
 
     ratings: dict[str, float] = {pid: float(base_rating) for pid in keys}
     games_played: dict[str, int] = {pid: 0 for pid in keys}
+    peak_rating: dict[str, float | None] = {pid: None for pid in keys}
+    peak_when: dict[str, str | None] = {pid: None for pid in keys}
 
     snapshots: list[tuple[float, float, float, float, float, float, str]] = []
     processed = 0
@@ -54,14 +56,16 @@ def rebuild_elo(
             """
             UPDATE players
                SET rating = ?,
-                   games_played = 0;
+                   games_played = 0,
+                   peak_rating = NULL,
+                   peak_rating_at = NULL;
             """,
             (float(base_rating),),
         )
 
         rows = conn.execute(
             """
-            SELECT game_id, player_a_id, player_b_id, score_a, score_b
+            SELECT game_id, player_a_id, player_b_id, score_a, score_b, start_time
             FROM games
             ORDER BY start_time, game_id;
             """
@@ -86,10 +90,17 @@ def rebuild_elo(
             )
             snapshots = []
 
-        for gid, pid_a, pid_b, score_a, score_b in rows:
+        def update_peak(pid: str, rating_value: float, ts: str) -> None:
+            prior = peak_rating[pid]
+            if prior is None or rating_value > prior:
+                peak_rating[pid] = rating_value
+                peak_when[pid] = ts
+
+        for gid, pid_a, pid_b, score_a, score_b, start_ts in rows:
             pid_a = str(pid_a)
             pid_b = str(pid_b)
             gid = str(gid)
+            start_ts = str(start_ts)
 
             na = games_played[pid_a]
             nb = games_played[pid_b]
@@ -110,6 +121,10 @@ def rebuild_elo(
             ratings[pid_a], ratings[pid_b] = ra_new, rb_new
             games_played[pid_a] = na + 1
             games_played[pid_b] = nb + 1
+
+            update_peak(pid_a, ra_new, start_ts)
+            update_peak(pid_b, rb_new, start_ts)
+
             processed += 1
 
             if len(snapshots) >= _BATCH:
@@ -117,9 +132,28 @@ def rebuild_elo(
 
         flush_snapshots()
 
+        payload = []
+        for pid in ratings:
+            payload.append(
+                (
+                    ratings[pid],
+                    games_played[pid],
+                    peak_rating[pid],
+                    peak_when[pid],
+                    pid,
+                )
+            )
+
         conn.executemany(
-            "UPDATE players SET rating = ?, games_played = ? WHERE player_id = ?;",
-            [(ratings[pid], games_played[pid], pid) for pid in ratings],
+            """
+            UPDATE players
+               SET rating = ?,
+                   games_played = ?,
+                   peak_rating = ?,
+                   peak_rating_at = ?
+             WHERE player_id = ?;
+            """,
+            payload,
         )
 
         conn.execute("COMMIT")
@@ -152,11 +186,22 @@ def _print_leaderboards(
         key=lambda item: (-item[1], names.get(item[0], item[0])),
     )
 
+    peak_rows = conn.execute(
+        "SELECT player_id, peak_rating, peak_rating_at FROM players"
+    ).fetchall()
+    peaks = {str(pid): (peak_val, peak_time) for pid, peak_val, peak_time in peak_rows}
+
     rank_width = len(str(limit))
     print(f"\nTop {limit} (highest ratings):")
     for idx, (pid, elo) in enumerate(ordered[:limit], start=1):
         nm = names.get(pid, "?")
-        print(f"  {idx:>{rank_width}}. {nm} ({pid}) — {fmt_rating(pid, elo)}")
+        pk = peaks.get(pid, (None, None))
+        peak_txt = ""
+        if pk[0] is not None:
+            peak_txt = f"; peak {float(pk[0]):.1f}"
+            if pk[1]:
+                peak_txt += f" @ {pk[1]}"
+        print(f"  {idx:>{rank_width}}. {nm} — {fmt_rating(pid, elo)}{peak_txt}")
 
     print(f"\nBottom {limit} (lowest ratings):")
     weakest = sorted(
@@ -165,7 +210,13 @@ def _print_leaderboards(
     )
     for idx, (pid, elo) in enumerate(weakest[:limit], start=1):
         nm = names.get(pid, "?")
-        print(f"  {idx:>{rank_width}}. {nm} ({pid}) — {fmt_rating(pid, elo)}")
+        pk = peaks.get(pid, (None, None))
+        peak_txt = ""
+        if pk[0] is not None:
+            peak_txt = f"; peak {float(pk[0]):.1f}"
+            if pk[1]:
+                peak_txt += f" @ {pk[1]}"
+        print(f"  {idx:>{rank_width}}. {nm} — {fmt_rating(pid, elo)}{peak_txt}")
 
 
 def main(argv: list[str] | None = None) -> int:

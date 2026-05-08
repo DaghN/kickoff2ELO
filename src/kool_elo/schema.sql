@@ -7,7 +7,9 @@ CREATE TABLE IF NOT EXISTS players (
     player_id      TEXT    PRIMARY KEY,
     display_name   TEXT    NOT NULL,
     rating         REAL    NOT NULL DEFAULT 1600,
-    games_played   INTEGER NOT NULL DEFAULT 0 CHECK (games_played >= 0)
+    games_played   INTEGER NOT NULL DEFAULT 0 CHECK (games_played >= 0),
+    peak_rating    REAL,
+    peak_rating_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS games (

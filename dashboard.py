@@ -43,6 +43,22 @@ def _rating_display_value(rating: float, games_played: int) -> str:
     return f"{rating:.1f}"
 
 
+def _peak_rating_text(value: object) -> str:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return "—"
+    try:
+        return f"{float(value):.1f}"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def _peak_time_text(value: object) -> str:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return "—"
+    text = str(value).strip()
+    return text if text else "—"
+
+
 @st.cache_data(show_spinner=False)
 def fetch_players(db_path_str: str) -> pd.DataFrame:
     path = Path(db_path_str)
@@ -50,8 +66,12 @@ def fetch_players(db_path_str: str) -> pd.DataFrame:
     try:
         return pd.read_sql_query(
             """
-            SELECT player_id, display_name, rating,
-                   COALESCE(games_played, 0) AS games_played
+            SELECT player_id,
+                   display_name,
+                   rating,
+                   COALESCE(games_played, 0) AS games_played,
+                   peak_rating,
+                   peak_rating_at
             FROM players
             ORDER BY rating DESC, display_name COLLATE NOCASE;
             """,
@@ -250,9 +270,13 @@ def main() -> None:
             elo_display=[
                 _rating_display_value(float(rating), int(games))
                 for rating, games in zip(filtered["rating"], filtered["games_played"])
-            ]
+            ],
+            peak_display=[_peak_rating_text(row) for row in filtered["peak_rating"]],
+            peak_recorded=[
+                _peak_time_text(row) for row in filtered["peak_rating_at"]
+            ],
         ).rename(columns={"games_played": "games"})
-        cols = ["display_name", "player_id", "games", "elo_display"]
+        cols = ["display_name", "games", "elo_display", "peak_display", "peak_recorded"]
         st.dataframe(
             view.loc[:, cols].reset_index(drop=True),
             use_container_width=True,
@@ -260,6 +284,8 @@ def main() -> None:
             column_config={
                 "games": st.column_config.NumberColumn("games", format="%d"),
                 "elo_display": st.column_config.TextColumn("rating"),
+                "peak_display": st.column_config.TextColumn("peak rating"),
+                "peak_recorded": st.column_config.TextColumn("peak recorded"),
             },
         )
 
