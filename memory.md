@@ -10,7 +10,7 @@ Working log for decisions, parameters, and next steps. Updated as the project ev
 ## Requirements (agreed)
 
 - **Domain:** ELO-style ratings for ~80k Kick Off 2 (Amiga) head-to-head matches from `retro_results.json` (project root).
-- **Stack:** Python, SQLite, pandas; later Streamlit for exploration.
+- **Stack:** Python, SQLite, pandas; Streamlit dashboard for local exploration (**Stage 4**).
 - **Data model:** Relational SQLite schema — `players` and `games` (see **Database schema** below).
 - **ELO (implemented):** Simple win/draw/loss only (“classic” fractional scores 1 / ½ / 0); base rating **1600**, symmetric **K = 32**; no goal-difference modifier in v1. New-player / provisional handling intentionally deferred (“everyone starts at `BASE_RATING` until games move them”).
 - **Engineering:** Clear layout, git from day one, maintain this file, keep code readable and easy to tune parameters later.
@@ -51,6 +51,7 @@ CLI overrides (`compute_elo --base`, `--k`) replay the ladder without touching `
 ## Repository layout
 
 ```
+├── dashboard.py       # Stage 4 Streamlit UI (run from repo root)
 ├── data/              # Local SQLite DB files (gitignored patterns)
 ├── src/kool_elo/      # Python package
 │                       # - schema.sql (+ schema_migrations for older files)
@@ -68,15 +69,15 @@ CLI overrides (`compute_elo --base`, `--k`) replay the ladder without touching `
 1. **Stage 1 — Import & schema:** DONE — DDL in `schema.sql`; loader `import_matches.py`. Games sorted by `StartTime`, then `game_id`; invalid self-matches (`PlayerA == PlayerB`) are skipped (`self_matches_skipped` in summary).
 2. **Stage 2 — ELO core:** DONE — `compute_elo` replays chronologically (`ORDER BY start_time, game_id`); persists `players.rating` plus per-game snapshots on `games` (`elo_*` columns); `elo_core.py` isolates maths; migrations patch legacy DB files created before these columns existed.
 3. **Stage 3 — Exports (deferred / on-demand):** Flat files (e.g. CSV) **only if** a concrete sharing or tooling need shows up. **Skip by default** — Streamlit and experiments do **not** depend on this.
-4. **Stage 4 — Streamlit (next):** Self-facing exploration: rankings, parameter controls, per-player history charts, etc., all backed by the existing SQLite DB.
+4. **Stage 4 — Streamlit:** DONE (`dashboard.py`) — leaderboard, aggregates, filtered rankings, rating history plots, optional full `compute_elo` replay invoked from sidebar (delegates to `PYTHONPATH=src` subprocess).
 
 ## Status
 
 - [x] Project skeleton, git, `.gitignore`, `memory.md`, staging plan documented.
 - [x] Stage 1: JSON → SQLite import (`data/retro_elo.sqlite3`).
 - [x] Stage 2: Elo recomputation (`python -m kool_elo.compute_elo`).
-- [ ] Stage 4: Streamlit dashboard (next focus).
-- [ ] Stage 3: only if/when file exports are actually needed.
+- [x] Stage 4: Streamlit explorer (`dashboard.py`).
+- [ ] Stage 3 remains optional (exports only when needed).
 
 ## Database schema (SQLite)
 
@@ -149,6 +150,17 @@ Replay is deterministic and **idempotent**: running it twice with identical inpu
 
 **Workflow caveat:** rerun import with `--overwrite` whenever the JSON snapshot changes materially; rerun `compute_elo` afterward to refresh ratings.
 
+### 4 · Streamlit dashboard (`dashboard.py`)
+
+```powershell
+pip install -r requirements.txt
+streamlit run dashboard.py
+```
+
+Tabs cover **Overview**, **Leaderboard**, **Rating history** (per-player line chart + table; needs populated `elo_*` columns), and **Recent games**. The sidebar exposes the SQLite path plus a **Run full replay** control that shells out to `python -m kool_elo.compute_elo` with configurable `BASE` / `K`.
+
+`dashboard.py` prepends `./src` onto `sys.path` so you do **not** need to set `PYTHONPATH` for Streamlit itself (the replay subprocess still injects it for `kool_elo`).
+
 ## Decisions log
 
 | Date       | Decision |
@@ -161,10 +173,11 @@ Replay is deterministic and **idempotent**: running it twice with identical inpu
 | 2026-05-09 | Stage 2: `schema_migrations.py` preserves compatibility with SQLite files minted during Stage‑1‑only DDL. |
 | 2026-05-10 | **Roadmap:** Treat **Stage 3 exports as deferred**; **Streamlit next** for self-facing exploration (queries SQLite directly—no CSV stage required). |
 | 2026-05-10 | **Long-term:** This repo is **PoC / sandbox**; production will likely **integrate with the community maintainer’s app**—expect UI/hosting rework; preserve **rules, schema, queries, and UX ideas** across the handoff. |
+| 2026-05-10 | **Stage 4 shipped:** Streamlit dashboard via `dashboard.py` (SQLite-backed views, sidebar replay hook calling `compute_elo`, rating history sourced from `elo_*`). |
 
 ## Next steps
 
-1. **Streamlit MVP** — wire to SQLite: leaderboard, basic filters, knobs for `BASE`/`K` (or documented “re-run `compute_elo`” flow where needed), starter **rating history** plots from `elo_*` / joins.
-2. **Elo experiments** — new-player / provisional rules, iterating in `elo_core` + replay + dashboard feedback.
-3. **Exports (optional)** — only if a real need appears (sharing, external tools); otherwise skip.
-4. **Integration prep (later)** — document schema and rules for handoff to the main community codebase; expect reimplementation there.
+1. **Product polish inside Streamlit** — opponent labels on history, head-to-head explorers, caching tuned to DB mtime if needed, dark theme / layout tweaks.
+2. **Elo experiments** — prototype new-player handling in `elo_core` + replay + UI affordances (e.g., compare two `compute_elo` runs).
+3. **Exports (Stage 3)** — only if sharing outside Python/SQLite becomes necessary.
+4. **Integration prep** — package schema + UX learnings for fold-in to the community maintainer’s deployment.
