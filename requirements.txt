@@ -1,0 +1,5 @@
+# Pin loosely for reproducibility; bump as needed.
+pandas>=2.0,<3
+
+# Dashboard (Stage 4+)
+# streamlit>=1.28,<2
