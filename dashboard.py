@@ -23,7 +23,24 @@ _SRC = _ROOT / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from kool_elo.config import BASE_RATING, DEFAULT_DB_PATH, K_FACTOR, PROJECT_ROOT
+from kool_elo.config import BASE_RATING, DEFAULT_DB_PATH, K_FACTOR, PROVISIONAL_GAMES_FULL_THRESHOLD, PROJECT_ROOT
+from kool_elo.schema_migrations import ensure_elo_schema
+
+
+def _apply_elo_migrations(sqlite_path: Path) -> None:
+    conn = sqlite3.connect(sqlite_path)
+    try:
+        conn.execute("PRAGMA foreign_keys = ON")
+        ensure_elo_schema(conn)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _rating_display_value(rating: float, games_played: int) -> str:
+    if games_played < PROVISIONAL_GAMES_FULL_THRESHOLD:
+        return f"{rating:.0f}?"
+    return f"{rating:.1f}"
 
 
 @st.cache_data(show_spinner=False)
@@ -33,7 +50,8 @@ def fetch_players(db_path_str: str) -> pd.DataFrame:
     try:
         return pd.read_sql_query(
             """
-            SELECT player_id, display_name, rating
+            SELECT player_id, display_name, rating,
+                   COALESCE(games_played, 0) AS games_played
             FROM players
             ORDER BY rating DESC, display_name COLLATE NOCASE;
             """,
@@ -161,11 +179,16 @@ def main() -> None:
         )
         st.stop()
 
+    _apply_elo_migrations(db_path)
+
     st.sidebar.markdown("---")
     st.sidebar.subheader("Recompute Elo")
     st.sidebar.caption(
-        "Replays all games in chronological order and refreshes `players.rating` "
-        "and per-game `elo_*` columns."
+        (
+            "Replays chronologically using the provisional dual‑K scheme (automatic ramp "
+            "with opponent damping — see `elo_core.py`). Ratings in SQLite remain numeric; the UI "
+            f"shows a trailing **`?`** while `games_played` stays below `{PROVISIONAL_GAMES_FULL_THRESHOLD}`."
+        )
     )
     base = float(st.sidebar.number_input("Base rating", value=float(BASE_RATING), step=1.0))
     k_factor = float(st.sidebar.number_input("K-factor", value=float(K_FACTOR), step=1.0))
@@ -223,14 +246,20 @@ def main() -> None:
             mask = filtered["display_name"].str.lower().str.contains(needle, na=False)
             filtered = filtered.loc[mask]
 
+        view = filtered.assign(
+            elo_display=[
+                _rating_display_value(float(rating), int(games))
+                for rating, games in zip(filtered["rating"], filtered["games_played"])
+            ]
+        ).rename(columns={"games_played": "games"})
+        cols = ["display_name", "player_id", "games", "elo_display"]
         st.dataframe(
-            filtered.reset_index(drop=True),
+            view.loc[:, cols].reset_index(drop=True),
             use_container_width=True,
             hide_index=True,
             column_config={
-                "player_id": st.column_config.TextColumn("player_id"),
-                "display_name": st.column_config.TextColumn("display_name"),
-                "rating": st.column_config.NumberColumn("rating", format="%.2f"),
+                "games": st.column_config.NumberColumn("games", format="%d"),
+                "elo_display": st.column_config.TextColumn("rating"),
             },
         )
 

@@ -15,3 +15,9 @@ DEFAULT_DB_PATH = DATA_DIR / "retro_elo.sqlite3"
 # --- ELO (used from Stage 2 onward) ---
 BASE_RATING = 1600
 K_FACTOR = 32
+
+# Provisional-player K scaling (forum spec — prematch game counters during replay).
+PROVISIONAL_GAMES_FULL_THRESHOLD = 20
+PROVISIONAL_K_CEILING_ABOVE_RATING = (
+    1900.0  # strict `>`; cap applies only while still provisional.
+)

@@ -34,3 +34,28 @@ def ensure_stage2_rating_columns(conn: sqlite3.Connection) -> None:
         if column not in cols:
             conn.execute(ddl)
 
+
+def ensure_provisional_columns(conn: sqlite3.Connection) -> None:
+    """Adds `games_played` on players plus per-match K audit columns."""
+
+    cols = _table_columns(conn, "players")
+    if "games_played" not in cols:
+        conn.execute(
+            "ALTER TABLE players ADD COLUMN games_played INTEGER NOT NULL DEFAULT 0;"
+        )
+
+    alterations = (
+        ("k_used_a", "ALTER TABLE games ADD COLUMN k_used_a REAL;"),
+        ("k_used_b", "ALTER TABLE games ADD COLUMN k_used_b REAL;"),
+    )
+    for column, ddl in alterations:
+        cols = _table_columns(conn, "games")
+        if column not in cols:
+            conn.execute(ddl)
+
+
+def ensure_elo_schema(conn: sqlite3.Connection) -> None:
+    """Convenience rollup for tools that mutate ratings."""
+
+    ensure_stage2_rating_columns(conn)
+    ensure_provisional_columns(conn)
