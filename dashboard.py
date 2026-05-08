@@ -112,23 +112,27 @@ def rating_history_for_player(db_path_str: str, player_id: str) -> pd.DataFrame:
         df = pd.read_sql_query(
             """
             SELECT
-              start_time,
-              game_id,
+              g.start_time,
+              g.game_id,
+              pa.display_name AS name_a,
+              pb.display_name AS name_b,
               CASE
-                WHEN player_a_id = :pid THEN elo_a_after
-                WHEN player_b_id = :pid THEN elo_b_after
+                WHEN g.player_a_id = :pid THEN g.elo_a_after
+                WHEN g.player_b_id = :pid THEN g.elo_b_after
               END AS rating_after,
               CASE
-                WHEN player_a_id = :pid THEN score_a
-                ELSE score_b
+                WHEN g.player_a_id = :pid THEN g.score_a
+                ELSE g.score_b
               END AS goals_for,
               CASE
-                WHEN player_a_id = :pid THEN score_b
-                ELSE score_a
+                WHEN g.player_a_id = :pid THEN g.score_b
+                ELSE g.score_a
               END AS goals_against
-            FROM games
-            WHERE player_a_id = :pid OR player_b_id = :pid
-            ORDER BY start_time, game_id;
+            FROM games g
+            JOIN players pa ON pa.player_id = g.player_a_id
+            JOIN players pb ON pb.player_id = g.player_b_id
+            WHERE g.player_a_id = :pid OR g.player_b_id = :pid
+            ORDER BY g.start_time, g.game_id;
             """,
             conn,
             params={"pid": player_id},
@@ -339,19 +343,31 @@ def main() -> None:
                 if not chart_df.empty:
                     chart_df = chart_df.set_index("parsed_time")[["rating_after"]]
                     st.line_chart(chart_df, height=360)
-                    st.dataframe(
-                        hist[
-                            ["start_time", "game_id", "goals_for", "goals_against", "rating_after"]
-                        ],
-                        hide_index=True,
-                        use_container_width=True,
-                        height=420,
-                        column_config={
-                            "rating_after": st.column_config.NumberColumn(
-                                "rating_after", format="%.2f"
-                            )
-                        },
-                    )
+
+                hist_view = hist.assign(
+                    matchup=lambda df: df["name_a"].astype(str) + " vs " + df["name_b"].astype(str),
+                    scoreline=lambda df: df["goals_for"].astype(str) + "–" + df["goals_against"].astype(str),
+                )
+                show_cols = [
+                    "start_time",
+                    "matchup",
+                    "scoreline",
+                    "rating_after",
+                    "game_id",
+                ]
+                st.dataframe(
+                    hist_view.loc[:, show_cols].reset_index(drop=True),
+                    hide_index=True,
+                    use_container_width=True,
+                    height=420,
+                    column_config={
+                        "start_time": st.column_config.TextColumn("when"),
+                        "matchup": st.column_config.TextColumn("players"),
+                        "scoreline": st.column_config.TextColumn("score"),
+                        "rating_after": st.column_config.NumberColumn("your rating after", format="%.2f"),
+                        "game_id": st.column_config.TextColumn("game"),
+                    },
+                )
 
     with recent_tab:
         st.subheader(f"Latest {200} matches (reverse chronological)")
