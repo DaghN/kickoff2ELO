@@ -116,18 +116,12 @@ def rating_history_for_player(db_path_str: str, player_id: str) -> pd.DataFrame:
               g.game_id,
               pa.display_name AS name_a,
               pb.display_name AS name_b,
+              g.score_a,
+              g.score_b,
               CASE
                 WHEN g.player_a_id = :pid THEN g.elo_a_after
                 WHEN g.player_b_id = :pid THEN g.elo_b_after
-              END AS rating_after,
-              CASE
-                WHEN g.player_a_id = :pid THEN g.score_a
-                ELSE g.score_b
-              END AS goals_for,
-              CASE
-                WHEN g.player_a_id = :pid THEN g.score_b
-                ELSE g.score_a
-              END AS goals_against
+              END AS rating_after
             FROM games g
             JOIN players pa ON pa.player_id = g.player_a_id
             JOIN players pb ON pb.player_id = g.player_b_id
@@ -344,9 +338,12 @@ def main() -> None:
                     chart_df = chart_df.set_index("parsed_time")[["rating_after"]]
                     st.line_chart(chart_df, height=360)
 
+                st.caption(
+                    "**Score** is **left name’s goals – right name’s goals**, in the same order as the *players* column."
+                )
                 hist_view = hist.assign(
                     matchup=lambda df: df["name_a"].astype(str) + " vs " + df["name_b"].astype(str),
-                    scoreline=lambda df: df["goals_for"].astype(str) + "–" + df["goals_against"].astype(str),
+                    scoreline=lambda df: df["score_a"].astype(str) + "–" + df["score_b"].astype(str),
                 )
                 show_cols = [
                     "start_time",
@@ -363,7 +360,7 @@ def main() -> None:
                     column_config={
                         "start_time": st.column_config.TextColumn("when"),
                         "matchup": st.column_config.TextColumn("players"),
-                        "scoreline": st.column_config.TextColumn("score"),
+                        "scoreline": st.column_config.TextColumn("goals (left – right)"),
                         "rating_after": st.column_config.NumberColumn("your rating after", format="%.2f"),
                         "game_id": st.column_config.TextColumn("game"),
                     },
