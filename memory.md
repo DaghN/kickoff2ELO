@@ -12,7 +12,7 @@ Working log for decisions, parameters, and next steps. Updated as the project ev
 - **Domain:** ELO-style ratings for ~80k Kick Off 2 (Amiga) head-to-head matches from `retro_results.json` (project root).
 - **Stack:** Python, SQLite, pandas; later Streamlit for exploration.
 - **Data model:** Relational SQLite schema — `players` and `games` (see **Database schema** below).
-- **ELO (later):** Simple win/draw/loss only; base rating **1600**, K-factor **32**; no goal-difference bonus in v1. New-player handling deferred.
+- **ELO (implemented):** Simple win/draw/loss only (“classic” fractional scores 1 / ½ / 0); base rating **1600**, symmetric **K = 32**; no goal-difference modifier in v1. New-player / provisional handling intentionally deferred (“everyone starts at `BASE_RATING` until games move them”).
 - **Engineering:** Clear layout, git from day one, maintain this file, keep code readable and easy to tune parameters later.
 
 ## Source file schema (`retro_results.json`)
@@ -30,21 +30,25 @@ Single JSON array. Each object (verified on sample):
 
 Record count checked locally: **77,589** games (slightly under 80k; file may grow).
 
-## Current parameters (for when ELO lands)
+## Current parameters
 
 | Parameter    | Value | Notes                    |
 |-------------|-------|--------------------------|
-| Base rating | 1600  | Starting rating        |
-| K-factor    | 32    | Standard single value v1 |
+| Base rating | 1600  | Starting rating (`BASE_RATING` in `config.py`) |
+| K-factor    | 32    | Same K for both players (`K_FACTOR`) |
 
-*Implemented in `src/kool_elo/config.py` (`BASE_RATING`, `K_FACTOR`) for easy tuning in later stages.*
+CLI overrides (`compute_elo --base`, `--k`) replay the ladder without touching `config.py` when trialling ideas quickly.
 
 ## Repository layout
 
 ```
 ├── data/              # Local SQLite DB files (gitignored patterns)
-├── src/kool_elo/      # Python package (config, schema.sql, import_matches)
-├── retro_results.json # Raw dump (project root; large — consider LFS or gitignore if sharing)
+├── src/kool_elo/      # Python package
+│                       # - schema.sql (+ schema_migrations for older files)
+│                       # - config, import_matches, verify_stage1
+│                       # - elo_core (pure formulas)
+│                       # - compute_elo (replay + persistence)
+├── retro_results.json # Raw dump (project root)
 ├── memory.md
 ├── requirements.txt
 └── .gitignore
@@ -52,47 +56,53 @@ Record count checked locally: **77,589** games (slightly under 80k; file may gro
 
 ## Staging plan (recommended)
 
-1. **Stage 1 — Import & schema:** DONE — DDL in `schema.sql`; loader `import_matches.py`. Games sorted by `StartTime`, then `game_id`; invalid self-matches (`PlayerA == PlayerB`) are skipped and counted in the import summary (`self_matches_skipped`).
-2. **Stage 2 — ELO core:** Chronological pass, update ratings in memory + `players` table; optional `game_elo` or rating snapshot columns for audit/rebuild.
-3. **Stage 3 — CLI / notebooks (optional):** Thin script to recompute, export CSV, sanity checks.
-4. **Stage 4 — Streamlit:** Rankings, player lookup, filters, parameter sidebar for future K/R0 experiments.
+1. **Stage 1 — Import & schema:** DONE — DDL in `schema.sql`; loader `import_matches.py`. Games sorted by `StartTime`, then `game_id`; invalid self-matches (`PlayerA == PlayerB`) are skipped (`self_matches_skipped` in summary).
+2. **Stage 2 — ELO core:** DONE — `compute_elo` replays chronologically (`ORDER BY start_time, game_id`); persists `players.rating` plus per-game snapshots on `games` (`elo_*` columns); `elo_core.py` isolates maths; migrations patch legacy DB files created before these columns existed.
+3. **Stage 3 — CLI / exports (optional):** CSV exports, richer audit helpers, notebooks.
+4. **Stage 4 — Streamlit:** Rankings explorer, filters, sliders bound to `--base/--k`-style experimentation.
 
 ## Status
 
 - [x] Project skeleton, git, `.gitignore`, `memory.md`, staging plan documented.
 - [x] Stage 1: JSON → SQLite import (`data/retro_elo.sqlite3`).
-- [ ] Stage 2: Chronological ELO pass and persistence.
+- [x] Stage 2: Elo recomputation (`python -m kool_elo.compute_elo`).
+- [ ] Stage 3+: exports / dashboards as needed.
 
 ## Database schema (SQLite)
 
-File: `data/retro_elo.sqlite3` (gitignored). Built from `src/kool_elo/schema.sql`.
+File: `data/retro_elo.sqlite3` (gitignored). Created by `schema.sql`; older DBs pick up deltas via `schema_migrations.ensure_stage2_rating_columns`.
 
 **`players`**
 
-| Column        | Type | Notes |
-|---------------|------|--------|
-| `player_id`   | TEXT | Primary key; same string ids as in JSON |
-| `display_name`| TEXT | One row per id; **last name seen in chronological order** wins |
+| Column         | Type | Notes |
+|----------------|------|-------|
+| `player_id`    | TEXT | Primary key; same string ids as in JSON |
+| `display_name` | TEXT | **Last chronological name appearance** wins during import |
+| `rating`       | REAL | Current Elo (default seed `1600`; recomputed replay resets everyone to `--base`) |
 
 **`games`**
 
 | Column          | Type    | Notes |
 |-----------------|---------|--------|
 | `game_id`       | TEXT    | Primary key |
-| `start_time`    | TEXT    | `YYYY-MM-DD HH:MM:SS` (lexicographic = chronological) |
+| `start_time`    | TEXT    | Lexicographically sortable timestamps |
 | `player_a_id`   | TEXT    | FK → `players` |
 | `player_b_id`   | TEXT    | FK → `players` |
-| `score_a`       | INTEGER | ≥ 0 |
-| `score_b`       | INTEGER | ≥ 0 |
-| `duration_secs` | INTEGER | ≥ 0 |
+| `score_a/b`     | INTEGER | Goals (determine W/D/L only) |
+| `duration_secs` | INTEGER | Not used by Elo v1 |
+| `elo_*`         | REAL    | Stored **before → after** ratings for both seats; `NULL` only before first successful compute |
 
-Indexes: `start_time`, `player_a_id`, `player_b_id`. Foreign keys enforced with `PRAGMA foreign_keys = ON` on import connection.
+Indexes: `(start_time)`, `(player_a_id)`, `(player_b_id)`. Always enable `PRAGMA foreign_keys = ON` when opening connections.
 
-**Import stats (local run, 2026-05-09):** 77,589 rows read; **2 self-matches skipped** (same id in A and B); **77,587** games loaded; **280** distinct players. Chronological span in DB: first game `2016-07-10 23:14:56`, latest `2026-05-08 21:14:07`.
+### Elo recap (implemented)
 
-## How to run the import
+Expected score for A vs B: \(E_A = \frac{1}{1 + 10^{(R_B - R_A)/400}}\). Actual score \(S_A \in \{1, \tfrac12, 0\}\) from goals; symmetric update \(R_A \leftarrow R_A + K(S_A - E_A)\), \(R_B\) analogously (\(S_B = 1 - S_A\) in wins/losses, both ½ draws). Goal differential ignored by design—roadmap item if ever desired.
 
-From project root (PowerShell example):
+**Import statistics (fixture on this workstation):** 77,587 stored games spanning `2016-07-10`→`2026-05-08`; post-compute illustrative spread roughly **2475 → 1062** rating points (purely illustrative; rerun after data refresh).
+
+## How to run tooling
+
+### 1 · Import (`import_matches`)
 
 ```powershell
 pip install -r requirements.txt
@@ -100,31 +110,48 @@ $env:PYTHONPATH = "src"
 python -m kool_elo.import_matches --overwrite
 ```
 
-- `--json PATH` — override input file (default: `retro_results.json` in project root).
-- `--db PATH` — override output DB (default: `data/retro_elo.sqlite3`).
-- `--overwrite` — delete existing DB file before writing (required if the file already exists).
+Flags: `--json`, `--db`, `--overwrite` (required if DB already exists).
 
-**Sanity check (recommended after import or DB changes)**
+### 2 · Stage 1 verifier
 
 ```powershell
 $env:PYTHONPATH = "src"
 python -m kool_elo.verify_stage1
 ```
 
-This checks SQLite `integrity_check`, foreign keys (when supported), orphaned rows, duplicate `game_id` values, non-negative constraints, lexical insert order versus `(start_time, game_id)`, and counts / player ids versus `retro_results.json` with the same self-match rule as the importer.
+Validates FK integrity, chronological insert order parity with JSON, excludes self-rows consistently, etc.
+
+### 3 · Elo replay (`compute_elo`)
+
+```powershell
+$env:PYTHONPATH = "src"
+python -m kool_elo.compute_elo          # leaderboard preview + summary
+python -m kool_elo.compute_elo --quiet # summary only
+```
+
+Flags:
+
+- `--db PATH` — override SQLite target (defaults to `data/retro_elo.sqlite3`).
+- `--base FLOAT` — starting rating for replay (defaults to `BASE_RATING`).
+- `--k FLOAT` — symmetric K-factor (defaults to `K_FACTOR`).
+
+Replay is deterministic and **idempotent**: running it twice with identical inputs reproduces identical ratings and snapshots (verified programmatically).
+
+**Workflow caveat:** rerun import with `--overwrite` whenever the JSON snapshot changes materially; rerun `compute_elo` afterward to refresh ratings.
 
 ## Decisions log
 
 | Date       | Decision |
 |------------|----------|
-| 2026-05-09 | Use `src/kool_elo` package; store generated DB under `data/` with gitignore on `*.sqlite` etc. |
-| 2026-05-09 | ELO and Streamlit deferred until after clean import. |
-| 2026-05-09 | Exclude self-matches (`PlayerA == PlayerB`) from `games`; log count in import summary. |
-| 2026-05-09 | `display_name` resolution: last appearance in time-sorted match list. |
-| 2026-05-09 | Document *vibecoding* preference: user steers outcomes in chat without doing implementation grunt work; still OK with rigorous technical explanation. |
+| 2026-05-09 | Package lives under `src/kool_elo`; artefacts under `data/`. |
+| 2026-05-09 | Skip self-match rows at import—they are undefined for pairwise Elo. |
+| 2026-05-09 | Display names follow last chronological occurrence (import sort). |
+| 2026-05-09 | Document *vibecoding*: user drives requirements via chat—not manual repo ops. |
+| 2026-05-09 | Stage 2: store per-game snapshots directly on `games` for reproducibility (`elo_*`). |
+| 2026-05-09 | Stage 2: `schema_migrations.py` preserves compatibility with SQLite files minted during Stage‑1‑only DDL. |
 
-## Next steps (Stage 2)
+## Next steps
 
-1. Add rating column(s) on `players` (and optional per-game rating snapshot table or columns for reproducibility).
-2. Implement chronological ELO using `config.BASE_RATING` and `config.K_FACTOR` (simple W/D/L).
-3. Script to recompute from DB (idempotent) for parameter experiments.
+1. Stage 3 niceties — export ranked CSV/HTML, matchup history drill-downs without Streamlit overhead.
+2. Stage 4 Streamlit UX — leaderboard tab, filters, plotting rating evolution using stored `elo_*` columns / joins.
+3. Optional future mechanics — provisional ratings, separate home/away, goal-sensitive K/FIDE-style caps, richer new-player onboarding.

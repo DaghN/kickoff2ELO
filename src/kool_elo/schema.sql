@@ -1,11 +1,12 @@
--- Kool Elo — core relational schema (Stage 1)
+-- Kool Elo — core relational schema (imports + ratings)
 -- SQLite: enable FK enforcement per connection (see import script).
 
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS players (
     player_id    TEXT    PRIMARY KEY,
-    display_name TEXT    NOT NULL
+    display_name TEXT    NOT NULL,
+    rating       REAL    NOT NULL DEFAULT 1600
 );
 
 CREATE TABLE IF NOT EXISTS games (
@@ -16,6 +17,10 @@ CREATE TABLE IF NOT EXISTS games (
     score_a       INTEGER NOT NULL CHECK (score_a >= 0),
     score_b       INTEGER NOT NULL CHECK (score_b >= 0),
     duration_secs INTEGER NOT NULL CHECK (duration_secs >= 0),
+    elo_a_before  REAL,
+    elo_b_before  REAL,
+    elo_a_after   REAL,
+    elo_b_after   REAL,
     FOREIGN KEY (player_a_id) REFERENCES players (player_id),
     FOREIGN KEY (player_b_id) REFERENCES players (player_id)
 );
