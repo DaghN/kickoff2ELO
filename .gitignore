@@ -11,6 +11,7 @@ ENV/
 /data/*.sqlite
 /data/*.sqlite3
 /data/*.db
+/data/results_sync_manifest.json
 
 # Jupyter / tooling
 .ipynb_checkpoints/

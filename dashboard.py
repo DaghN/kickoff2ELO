@@ -23,8 +23,17 @@ _SRC = _ROOT / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from kool_elo.config import BASE_RATING, DEFAULT_DB_PATH, K_FACTOR, PROVISIONAL_GAMES_FULL_THRESHOLD, PROJECT_ROOT
+from kool_elo.config import (
+    BASE_RATING,
+    DEFAULT_DB_PATH,
+    DEFAULT_JSON_PATH,
+    K_FACTOR,
+    PROVISIONAL_GAMES_FULL_THRESHOLD,
+    PROJECT_ROOT,
+    resolved_remote_results_url,
+)
 from kool_elo.schema_migrations import ensure_elo_schema
+from kool_elo.sync_remote_results import apply_import_and_elo, sync_remote_results
 
 
 def _apply_elo_migrations(sqlite_path: Path) -> None:
@@ -181,6 +190,10 @@ def run_compute_elo(db_path: Path, base: float, k: float) -> None:
     subprocess.run(cmd, cwd=str(PROJECT_ROOT), env=env, check=True)
 
 
+def _env_truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes")
+
+
 def main() -> None:
     st.set_page_config(page_title="Kool Elo", layout="wide")
     st.title("Kool Elo — Kick Off 2 ratings")
@@ -198,6 +211,115 @@ def main() -> None:
         st.stop()
 
     _apply_elo_migrations(db_path)
+
+    json_out = DEFAULT_JSON_PATH.resolve()
+
+    if _env_truthy("KOOL_AUTO_SYNC_ON_START") and not st.session_state.get(
+        "_kool_remote_autosync_once"
+    ):
+        st.session_state["_kool_remote_autosync_once"] = True
+        boot_url = resolved_remote_results_url()
+        try:
+            with st.spinner("Checking community results dump (downloads full JSON)…"):
+                stats_boot = sync_remote_results(
+                    url=boot_url,
+                    out_path=json_out,
+                    replace_local=False,
+                    force_fetch=False,
+                )
+            if not stats_boot.payload_unchanged:
+                if (
+                    _env_truthy("KOOL_AUTO_SYNC_APPLY")
+                    and (
+                        stats_boot.wrote_file
+                        or stats_boot.added_ids
+                        or stats_boot.updated_rows
+                    )
+                ):
+                    with st.spinner("import_matches + compute_elo …"):
+                        apply_import_and_elo()
+                elif not _env_truthy("KOOL_AUTO_SYNC_APPLY"):
+                    st.session_state["_kool_json_refresh_pending"] = True
+                st.cache_data.clear()
+                st.rerun()
+        except Exception as exc:  # noqa: BLE001
+            st.sidebar.warning(f"Automatic remote sync failed: {exc}")
+
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Community JSON")
+    st.sidebar.caption(
+        "Joshua serves the full payload each visit (no etag). We SHA-256 the body "
+        "and skip SQLite work when nothing changed. "
+        "`KOOL_REMOTE_RESULTS_URL` overrides the default URL."
+    )
+    dump_url = st.sidebar.text_input(
+        "Dump URL",
+        value=resolved_remote_results_url(),
+        help=(
+            "KOOL_REMOTE_RESULTS_URL env overrides the default; built-in default uses ?Q=Dagh on joshua.kickoff2.net."
+        ),
+    )
+    replace_local = st.sidebar.checkbox(
+        "Replace local JSON (remote only)",
+        value=False,
+        help="Deletes local-only rows until the next merge.",
+    )
+    force_fetch_sidebar = st.sidebar.checkbox(
+        "Ignore hash / re-merge anyway",
+        value=False,
+    )
+    rebuild_after_sync = st.sidebar.checkbox(
+        "After sync: import_matches + compute_elo",
+        value=True,
+    )
+    if st.session_state.get("_kool_json_refresh_pending"):
+        st.sidebar.info(
+            "JSON on disk may be newer than SQLite (auto-sync without "
+            "`KOOL_AUTO_SYNC_APPLY`). Pull again with ✓ rebuild or toggle env."
+        )
+    if st.sidebar.button("Sync now"):
+        with st.spinner("Fetching dump + merging locally…"):
+            try:
+                stats = sync_remote_results(
+                    url=dump_url.strip(),
+                    out_path=json_out,
+                    replace_local=replace_local,
+                    force_fetch=force_fetch_sidebar,
+                )
+            except Exception as exc:  # noqa: BLE001
+                st.sidebar.error(f"{type(exc).__name__}: {exc}")
+            else:
+                if stats.payload_unchanged:
+                    st.sidebar.success(
+                        "Remote body matches last SHA-256 — skipping JSON rewrite."
+                    )
+                else:
+                    parts = [
+                        f"remote rows: {stats.remote_rows:,}",
+                        f"merged: {stats.merged_rows:,}",
+                        f"added GameIDs: +{stats.added_ids:,}",
+                        f"updates: {stats.updated_rows:,}",
+                        f"wrote JSON: {'yes' if stats.wrote_file else 'no'}",
+                    ]
+                    st.sidebar.success(" · ".join(parts))
+                    changed_local = (
+                        stats.wrote_file
+                        or stats.added_ids
+                        or stats.updated_rows
+                        or replace_local
+                    )
+                    if rebuild_after_sync and changed_local:
+                        with st.spinner("import_matches + compute_elo …"):
+                            try:
+                                apply_import_and_elo()
+                            except subprocess.CalledProcessError:
+                                st.sidebar.error("Rebuild pipeline failed.")
+                                st.stop()
+                        st.session_state.pop("_kool_json_refresh_pending", None)
+                    elif changed_local:
+                        st.session_state["_kool_json_refresh_pending"] = True
+                    st.cache_data.clear()
+                    st.rerun()
 
     st.sidebar.markdown("---")
     st.sidebar.subheader("Recompute Elo")
