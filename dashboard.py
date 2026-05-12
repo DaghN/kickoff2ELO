@@ -46,21 +46,6 @@ def _apply_elo_migrations(sqlite_path: Path) -> None:
         conn.close()
 
 
-def _rating_display_value(rating: float, games_played: int) -> str:
-    if games_played < PROVISIONAL_GAMES_FULL_THRESHOLD:
-        return f"{rating:.0f}?"
-    return f"{rating:.1f}"
-
-
-def _peak_rating_text(value: object) -> str:
-    if value is None or (isinstance(value, float) and pd.isna(value)):
-        return "—"
-    try:
-        return f"{float(value):.1f}"
-    except (TypeError, ValueError):
-        return "—"
-
-
 def _peak_time_text(value: object) -> str:
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return "—"
@@ -379,8 +364,9 @@ def main() -> None:
     with board_tab:
         st.subheader("Rankings")
         st.caption(
-            f"Peak stays **—** until **{PROVISIONAL_GAMES_FULL_THRESHOLD}** completed matches; provisional "
-            "current ratings append **`?`**."
+            f"Peak stays **—** until **{PROVISIONAL_GAMES_FULL_THRESHOLD}** completed matches. "
+            "The **?** column marks provisional estimates — **rating** and **peak rating** "
+            "are numbers so sorting is correct."
         )
         query = st.text_input("Filter by name (substring, case-insensitive)", value="")
 
@@ -390,37 +376,42 @@ def main() -> None:
             mask = filtered["display_name"].str.lower().str.contains(needle, na=False)
             filtered = filtered.loc[mask]
 
+        gp = filtered["games_played"].astype(int)
+        provisional = gp < PROVISIONAL_GAMES_FULL_THRESHOLD
+        peak_eligible = ~provisional
+
+        peak_num = pd.to_numeric(filtered["peak_rating"], errors="coerce")
+        peak_num = peak_num.where(peak_eligible)
+
         view = filtered.assign(
-            elo_display=[
-                _rating_display_value(float(rating), int(games))
-                for rating, games in zip(filtered["rating"], filtered["games_played"])
+            games=gp,
+            # Numeric columns so interactive sort is numeric, not lexicographic on "931?" vs "2335".
+            prov_mark=[
+                "?" if bool(prov) else ""
+                for prov in provisional
             ],
-            peak_display=[
-                (
-                    _peak_rating_text(pk)
-                    if int(gp) >= PROVISIONAL_GAMES_FULL_THRESHOLD
-                    else "—"
-                )
-                for pk, gp in zip(filtered["peak_rating"], filtered["games_played"])
-            ],
+            peak_rating=peak_num,
             peak_recorded=[
-                (
-                    _peak_time_text(pw)
-                    if int(gp) >= PROVISIONAL_GAMES_FULL_THRESHOLD
-                    else "—"
-                )
-                for pw, gp in zip(filtered["peak_rating_at"], filtered["games_played"])
+                _peak_time_text(pw) if elig else "—"
+                for pw, elig in zip(filtered["peak_rating_at"], peak_eligible)
             ],
-        ).rename(columns={"games_played": "games"})
-        cols = ["display_name", "games", "elo_display", "peak_display", "peak_recorded"]
+        )
+        cols = ["display_name", "games", "rating", "prov_mark", "peak_rating", "peak_recorded"]
         st.dataframe(
             view.loc[:, cols].reset_index(drop=True),
             use_container_width=True,
             hide_index=True,
             column_config={
                 "games": st.column_config.NumberColumn("games", format="%d"),
-                "elo_display": st.column_config.TextColumn("rating"),
-                "peak_display": st.column_config.TextColumn("peak rating"),
+                "rating": st.column_config.NumberColumn("rating", format="%.1f"),
+                "prov_mark": st.column_config.TextColumn(
+                    "?",
+                    help=(
+                        "**?** marks a provisional estimate (fewer than "
+                        f"{PROVISIONAL_GAMES_FULL_THRESHOLD} games played)."
+                    ),
+                ),
+                "peak_rating": st.column_config.NumberColumn("peak rating", format="%.1f"),
                 "peak_recorded": st.column_config.TextColumn("peak recorded"),
             },
         )
