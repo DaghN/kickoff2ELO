@@ -36,6 +36,25 @@ from kool_elo.config import (
     PROJECT_ROOT,
     resolved_remote_results_url,
 )
+
+# Support older `config.py` copies that predate offline KOATD (avoids ImportError).
+import kool_elo.config as _kool_config
+
+OFFLINE_KOATD_DB_PATH = getattr(
+    _kool_config,
+    "OFFLINE_KOATD_DB_PATH",
+    _kool_config.DATA_DIR / "offline_koatd.sqlite3",
+)
+KOATD_SCORES_EXPORT_CSV = getattr(
+    _kool_config,
+    "KOATD_SCORES_EXPORT_CSV",
+    _kool_config.DATA_DIR / "koatd_scores_export.csv",
+)
+KOATD_TOURNAMENTS_EXPORT_CSV = getattr(
+    _kool_config,
+    "KOATD_TOURNAMENTS_EXPORT_CSV",
+    _kool_config.DATA_DIR / "koatd_tournament_players_export.csv",
+)
 from kool_elo.schema_migrations import ensure_elo_schema
 from kool_elo.sync_remote_results import apply_import_and_elo, sync_remote_results
 
@@ -204,6 +223,44 @@ def recent_games(db_path_str: str, limit: int = 200) -> pd.DataFrame:
         )
     finally:
         conn.close()
+
+
+def run_import_koatd_offline_bundle(
+    *,
+    offline_db: Path,
+    scores_csv: Path,
+    tournaments_csv: Path,
+    base: float,
+    k: float,
+    use_provisional_dual_k: bool,
+) -> None:
+    """Rebuild `offline_db` from Access CSV dumps, then replay Elo (same K settings as sidebar)."""
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(PROJECT_ROOT / "src")
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "kool_elo.import_koatd_offline",
+            "--overwrite",
+            "--scores",
+            str(scores_csv.resolve()),
+            "--tournaments",
+            str(tournaments_csv.resolve()),
+            "--db",
+            str(offline_db.resolve()),
+        ],
+        cwd=str(PROJECT_ROOT),
+        env=env,
+        check=True,
+    )
+    run_compute_elo(
+        offline_db,
+        base,
+        k,
+        use_provisional_dual_k=use_provisional_dual_k,
+    )
 
 
 def run_compute_elo(
@@ -469,8 +526,8 @@ If `KOOL_CLOUD_AUTO_BOOTSTRAP` is `true`, automation runs **once per Cloud sandb
     players_df = fetch_players(db_key)
     games_agg = fetch_games_agg(db_key)
 
-    overview_tab, board_tab, history_tab, recent_tab = st.tabs(
-        ["Overview", "Leaderboard", "Rating history", "Recent games"]
+    overview_tab, board_tab, history_tab, recent_tab, offline_tab = st.tabs(
+        ["Overview", "Leaderboard", "Rating history", "Recent games", "Offline KOATD"]
     )
 
     with overview_tab:
@@ -618,6 +675,103 @@ If `KOOL_CLOUD_AUTO_BOOTSTRAP` is `true`, automation runs **once per Cloud sandb
         st.subheader(f"Latest {200} matches (reverse chronological)")
         recent = recent_games(db_key, limit=200)
         st.dataframe(recent, use_container_width=True, hide_index=True)
+
+    with offline_tab:
+        st.subheader("KOATD offline")
+        st.caption(
+            "Separate SQLite built from Access exports (`Scores` + `Tournament players`). "
+            "`start_time` is tournament calendar day + intra-event ordering (not precise kickoff)."
+        )
+        off_path = OFFLINE_KOATD_DB_PATH.resolve()
+        bundled_scores = KOATD_SCORES_EXPORT_CSV.resolve()
+        bundled_tours = KOATD_TOURNAMENTS_EXPORT_CSV.resolve()
+        if not off_path.is_file():
+            st.markdown(
+                "**Streamlit Cloud** only sees files pushed to GitHub. "
+                "`offline_koatd.sqlite3` is gitignored locally, so the hosted app never receives it unless you rebuild on Cloud "
+                "(or force-add the DB)."
+            )
+            if bundled_scores.is_file() and bundled_tours.is_file():
+                st.warning(
+                    "Bundled KOATD CSVs were found in the repo (`data/`). "
+                    "You can build the SQLite database once inside this deployment."
+                )
+                if st.button("Build KOATD database from bundled CSV exports", key="_kool_cloud_build_koatd"):
+                    try:
+                        with st.spinner("Importing KOATD CSV → SQLite → Elo replay (may take a minute on Cloud)…"):
+                            run_import_koatd_offline_bundle(
+                                offline_db=OFFLINE_KOATD_DB_PATH,
+                                scores_csv=bundled_scores,
+                                tournaments_csv=bundled_tours,
+                                base=base,
+                                k=k_factor,
+                                use_provisional_dual_k=use_dual_k,
+                            )
+                    except subprocess.CalledProcessError as exc:
+                        st.error(f"KOATD build failed (exit {exc.returncode}).")
+                        st.stop()
+                    st.cache_data.clear()
+                    st.success("Offline KOATD database built.")
+                    st.rerun()
+
+            else:
+                st.info(
+                    "No offline SQLite yet — and no **`data/koatd_scores_export.csv`** "
+                    "**+ `data/koatd_tournament_players_export.csv`** in this deployment "
+                    "(commit them from your PC after `EXPORT_KOATD.bat`).\n\n"
+                    "Alternatively, from the repo root locally:\n\n"
+                    "```\nPYTHONPATH=src python -m kool_elo.import_koatd_offline --overwrite\n"
+                    "PYTHONPATH=src python -m kool_elo.compute_elo --db data/offline_koatd.sqlite3\n```"
+                )
+        else:
+            _apply_elo_migrations(off_path)
+            offline_key = str(off_path)
+            offline_players = fetch_players(offline_key)
+            offline_games = fetch_games_agg(offline_key)
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Players", f"{len(offline_players):,}")
+            c2.metric("Games", f"{int(offline_games['games']):,}")
+            c3.metric("First → last", (offline_games["first_ts"] or "—") + " → " + (offline_games["last_ts"] or "—"))
+
+            fq = st.text_input("Filter name", value="", key="_kool_offline_name_filter")
+            view_o = offline_players
+            if fq.strip():
+                nm = fq.strip().lower()
+                view_o = view_o.loc[view_o["display_name"].str.lower().str.contains(nm, na=False)]
+
+            gpo = view_o["games_played"].astype(int)
+            prov_o = gpo < PROVISIONAL_GAMES_FULL_THRESHOLD
+
+            peak_elig_o = ~prov_o
+
+            pk_o = pd.to_numeric(view_o["peak_rating"], errors="coerce")
+            pk_o = pk_o.where(peak_elig_o)
+
+            tbl = view_o.assign(
+                games=gpo,
+                prov_mark=["?" if bool(p) else "" for p in prov_o],
+                peak_rating=pk_o,
+            )
+            cols = ["display_name", "games", "rating", "prov_mark", "peak_rating"]
+            show = tbl.loc[:, cols].reset_index(drop=True)
+            st.dataframe(
+                show,
+                use_container_width=True,
+                hide_index=True,
+                height=min(620, max(420, len(show) * 35)),
+                column_config={
+                    "display_name": st.column_config.TextColumn("name"),
+                    "games": st.column_config.NumberColumn("games", format="%d"),
+                    "rating": st.column_config.NumberColumn("rating", format="%.1f"),
+                    "prov_mark": st.column_config.TextColumn("?", width="small"),
+                    "peak_rating": st.column_config.NumberColumn("peak", format="%.1f"),
+                },
+            )
+            st.caption(
+                "**?** provisional (under "
+                f"{PROVISIONAL_GAMES_FULL_THRESHOLD} games). Replay with "
+                "`python -m kool_elo.compute_elo --db data/offline_koatd.sqlite3` after re-import."
+            )
 
 
 if __name__ == "__main__":

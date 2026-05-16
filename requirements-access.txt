@@ -1,0 +1,3 @@
+# Optional: extract tables from Microsoft Access .mdb / .accdb (Windows ODBC).
+# pip install -r requirements-access.txt
+pyodbc>=5.0,<6
