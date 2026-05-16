@@ -1,4 +1,5 @@
 # Pin loosely for reproducibility; bump as needed.
 pandas>=2.0,<3
 
-streamlit>=1.28,<2
+# Cell selection + switch_page(query_params=…) need a recent 1.x (Community Cloud otherwise resolves an older 1.28-style install).
+streamlit>=1.53,<2
