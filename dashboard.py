@@ -56,6 +56,13 @@ KOATD_TOURNAMENTS_EXPORT_CSV = getattr(
     _kool_config.DATA_DIR / "koatd_tournament_players_export.csv",
 )
 from kool_elo.schema_migrations import ensure_elo_schema
+from kool_elo.streamlit_nav import navigate_if_player_name_cell_clicked
+from kool_elo.streamlit_queries import (
+    fetch_games_agg,
+    fetch_players,
+    rating_history_for_player,
+    recent_games,
+)
 from kool_elo.sync_remote_results import apply_import_and_elo, sync_remote_results
 
 
@@ -119,110 +126,6 @@ def _peak_time_text(value: object) -> str:
         return "—"
     text = str(value).strip()
     return text if text else "—"
-
-
-@st.cache_data(show_spinner=False)
-def fetch_players(db_path_str: str) -> pd.DataFrame:
-    path = Path(db_path_str)
-    conn = sqlite3.connect(path)
-    try:
-        return pd.read_sql_query(
-            """
-            SELECT player_id,
-                   display_name,
-                   rating,
-                   COALESCE(games_played, 0) AS games_played,
-                   peak_rating,
-                   peak_rating_at
-            FROM players
-            ORDER BY rating DESC, display_name COLLATE NOCASE;
-            """,
-            conn,
-        )
-    finally:
-        conn.close()
-
-
-@st.cache_data(show_spinner=False)
-def fetch_games_agg(db_path_str: str) -> pd.Series:
-    path = Path(db_path_str)
-    conn = sqlite3.connect(path)
-    try:
-        row = conn.execute(
-            """
-            SELECT
-              COUNT(*) AS games,
-              MIN(start_time) AS first_ts,
-              MAX(start_time) AS last_ts,
-              AVG(CAST(duration_secs AS REAL)) AS avg_duration_secs
-            FROM games;
-            """
-        ).fetchone()
-        cols = ("games", "first_ts", "last_ts", "avg_duration_secs")
-        if row is None:
-            return pd.Series({name: None for name in cols})
-        return pd.Series(dict(zip(cols, row)))
-    finally:
-        conn.close()
-
-
-@st.cache_data(show_spinner=False)
-def rating_history_for_player(db_path_str: str, player_id: str) -> pd.DataFrame:
-    path = Path(db_path_str)
-    conn = sqlite3.connect(path)
-    try:
-        df = pd.read_sql_query(
-            """
-            SELECT
-              g.start_time,
-              g.game_id,
-              pa.display_name AS name_a,
-              pb.display_name AS name_b,
-              g.score_a,
-              g.score_b,
-              CASE
-                WHEN g.player_a_id = :pid THEN g.elo_a_after
-                WHEN g.player_b_id = :pid THEN g.elo_b_after
-              END AS rating_after
-            FROM games g
-            JOIN players pa ON pa.player_id = g.player_a_id
-            JOIN players pb ON pb.player_id = g.player_b_id
-            WHERE g.player_a_id = :pid OR g.player_b_id = :pid
-            ORDER BY g.start_time, g.game_id;
-            """,
-            conn,
-            params={"pid": player_id},
-        )
-        return df
-    finally:
-        conn.close()
-
-
-@st.cache_data(show_spinner=False)
-def recent_games(db_path_str: str, limit: int = 200) -> pd.DataFrame:
-    path = Path(db_path_str)
-    conn = sqlite3.connect(path)
-    try:
-        return pd.read_sql_query(
-            """
-            SELECT
-              start_time,
-              game_id,
-              player_a_id,
-              player_b_id,
-              score_a,
-              score_b,
-              elo_a_after,
-              elo_b_after
-            FROM games
-            ORDER BY start_time DESC, game_id DESC
-            LIMIT ?;
-            """,
-            conn,
-            params=(int(limit),),
-        )
-    finally:
-        conn.close()
 
 
 def run_import_koatd_offline_bundle(
@@ -427,6 +330,8 @@ If `KOOL_CLOUD_AUTO_BOOTSTRAP` is `true`, automation runs **once per Cloud sandb
 
     active_db = amiga500_path if browse_amiga500 else db_path
     _apply_elo_migrations(active_db)
+    st.session_state["_kool_online_db_path"] = str(db_path.resolve())
+    st.session_state["_kool_amiga500_db_path"] = str(AMIGA500_DB_PATH.resolve())
 
     if (
         not browse_amiga500
@@ -622,6 +527,7 @@ If `KOOL_CLOUD_AUTO_BOOTSTRAP` is `true`, automation runs **once per Cloud sandb
     with board_tab:
         st.subheader("Rankings")
         st.caption(
+            "Select a **player** cell (one click) to open their profile. "
             f"Peak stays **—** until **{PROVISIONAL_GAMES_FULL_THRESHOLD}** completed matches. "
             "The **?** column marks provisional estimates — **rating** and **peak rating** "
             "are numbers so sorting is correct."
@@ -643,7 +549,6 @@ If `KOOL_CLOUD_AUTO_BOOTSTRAP` is `true`, automation runs **once per Cloud sandb
 
         view = filtered.assign(
             games=gp,
-            # Numeric columns so interactive sort is numeric, not lexicographic on "931?" vs "2335".
             prov_mark=[
                 "?" if bool(prov) else ""
                 for prov in provisional
@@ -654,12 +559,19 @@ If `KOOL_CLOUD_AUTO_BOOTSTRAP` is `true`, automation runs **once per Cloud sandb
                 for pw, elig in zip(filtered["peak_rating_at"], peak_eligible)
             ],
         )
-        cols = ["display_name", "games", "rating", "prov_mark", "peak_rating", "peak_recorded"]
-        st.dataframe(
-            view.loc[:, cols].reset_index(drop=True),
+        uni = "amiga500" if browse_amiga500 else "online"
+        nav_lb = view.assign(player=view["display_name"].astype(str)).copy()
+        vis_lb = ["player", "games", "rating", "prov_mark", "peak_rating", "peak_recorded"]
+        ev_lb = st.dataframe(
+            nav_lb,
+            column_order=vis_lb,
             use_container_width=True,
             hide_index=True,
+            key="_kool_nav_leaderboard",
+            on_select="rerun",
+            selection_mode="single-cell",
             column_config={
+                "player": st.column_config.TextColumn("Player"),
                 "games": st.column_config.NumberColumn("games", format="%d"),
                 "rating": st.column_config.NumberColumn("rating", format="%.1f"),
                 "prov_mark": st.column_config.TextColumn(
@@ -672,6 +584,13 @@ If `KOOL_CLOUD_AUTO_BOOTSTRAP` is `true`, automation runs **once per Cloud sandb
                 "peak_rating": st.column_config.NumberColumn("peak rating", format="%.1f"),
                 "peak_recorded": st.column_config.TextColumn("peak recorded"),
             },
+        )
+        navigate_if_player_name_cell_clicked(
+            event=ev_lb,
+            df=nav_lb,
+            widget_key="_kool_nav_leaderboard",
+            universe=uni,
+            name_columns={"player": "player_id"},
         )
 
     with history_tab:
@@ -710,37 +629,86 @@ If `KOOL_CLOUD_AUTO_BOOTSTRAP` is `true`, automation runs **once per Cloud sandb
                     st.line_chart(chart_df, height=360)
 
                 st.caption(
-                    "**Score** is **left name’s goals – right name’s goals**, in the same order as the *players* column."
+                    "**Score** is **left name’s goals – right name’s goals**, in the same order as the *players* columns. "
+                    "Select **A** or **B** to open that player."
                 )
-                hist_view = hist.assign(
-                    matchup=lambda df: df["name_a"].astype(str) + " vs " + df["name_b"].astype(str),
+                uni = "amiga500" if browse_amiga500 else "online"
+                hist_nav = hist.assign(
+                    player_a=hist["name_a"].astype(str),
+                    player_b=hist["name_b"].astype(str),
                     scoreline=lambda df: df["score_a"].astype(str) + "–" + df["score_b"].astype(str),
                 )
-                show_cols = [
-                    "start_time",
-                    "matchup",
-                    "scoreline",
-                    "rating_after",
-                    "game_id",
-                ]
-                st.dataframe(
-                    hist_view.loc[:, show_cols].reset_index(drop=True),
+                vis_h = ["start_time", "player_a", "player_b", "scoreline", "rating_after", "game_id"]
+                ev_h = st.dataframe(
+                    hist_nav,
+                    column_order=vis_h,
                     hide_index=True,
                     use_container_width=True,
                     height=420,
+                    key="_kool_nav_history",
+                    on_select="rerun",
+                    selection_mode="single-cell",
                     column_config={
                         "start_time": st.column_config.TextColumn("when"),
-                        "matchup": st.column_config.TextColumn("players"),
+                        "player_a": st.column_config.TextColumn("A"),
+                        "player_b": st.column_config.TextColumn("B"),
                         "scoreline": st.column_config.TextColumn("goals (left – right)"),
                         "rating_after": st.column_config.NumberColumn("your rating after", format="%.2f"),
                         "game_id": st.column_config.TextColumn("game"),
                     },
                 )
+                navigate_if_player_name_cell_clicked(
+                    event=ev_h,
+                    df=hist_nav,
+                    widget_key="_kool_nav_history",
+                    universe=uni,
+                    name_columns={"player_a": "player_a_id", "player_b": "player_b_id"},
+                )
 
     with recent_tab:
         st.subheader(f"Latest {200} matches (reverse chronological)")
+        st.caption("Select **A** or **B** to open that player.")
+        uni = "amiga500" if browse_amiga500 else "online"
         recent = recent_games(db_key, limit=200)
-        st.dataframe(recent, use_container_width=True, hide_index=True)
+        recent_nav = recent.assign(
+            player_a=recent["name_a"].astype(str),
+            player_b=recent["name_b"].astype(str),
+            scoreline=recent["score_a"].astype(str) + "–" + recent["score_b"].astype(str),
+        )
+        vis_r = [
+            "start_time",
+            "player_a",
+            "player_b",
+            "scoreline",
+            "elo_a_after",
+            "elo_b_after",
+            "game_id",
+        ]
+        ev_r = st.dataframe(
+            recent_nav,
+            column_order=vis_r,
+            use_container_width=True,
+            hide_index=True,
+            key="_kool_nav_recent",
+            on_select="rerun",
+            selection_mode="single-cell",
+            column_config={
+                "start_time": st.column_config.TextColumn("when"),
+                "player_a": st.column_config.TextColumn("A"),
+                "player_b": st.column_config.TextColumn("B"),
+                "scoreline": st.column_config.TextColumn("score"),
+                "elo_a_after": st.column_config.NumberColumn("Elo A after", format="%.2f"),
+                "elo_b_after": st.column_config.NumberColumn("Elo B after", format="%.2f"),
+                "game_id": st.column_config.TextColumn("game"),
+            },
+        )
+        navigate_if_player_name_cell_clicked(
+            event=ev_r,
+            df=recent_nav,
+            widget_key="_kool_nav_recent",
+            universe=uni,
+            name_columns={"player_a": "player_a_id", "player_b": "player_b_id"},
+        )
 
     with amiga500_tab:
         st.subheader("Amiga 500")
@@ -856,20 +824,31 @@ If `KOOL_CLOUD_AUTO_BOOTSTRAP` is `true`, automation runs **once per Cloud sandb
                 prov_mark=["?" if bool(p) else "" for p in prov_o],
                 peak_rating=pk_o,
             )
-            cols = ["display_name", "games", "rating", "prov_mark", "peak_rating"]
-            show = tbl.loc[:, cols].reset_index(drop=True)
-            st.dataframe(
-                show,
+            nav_amiga = tbl.assign(player=tbl["display_name"].astype(str)).copy()
+            vis_a = ["player", "games", "rating", "prov_mark", "peak_rating"]
+            ev_a = st.dataframe(
+                nav_amiga,
+                column_order=vis_a,
                 use_container_width=True,
                 hide_index=True,
-                height=min(620, max(420, len(show) * 35)),
+                height=min(620, max(420, len(nav_amiga) * 35)),
+                key="_kool_nav_amiga_peek",
+                on_select="rerun",
+                selection_mode="single-cell",
                 column_config={
-                    "display_name": st.column_config.TextColumn("name"),
+                    "player": st.column_config.TextColumn("Player"),
                     "games": st.column_config.NumberColumn("games", format="%d"),
                     "rating": st.column_config.NumberColumn("rating", format="%.1f"),
                     "prov_mark": st.column_config.TextColumn("?", width="small"),
                     "peak_rating": st.column_config.NumberColumn("peak", format="%.1f"),
                 },
+            )
+            navigate_if_player_name_cell_clicked(
+                event=ev_a,
+                df=nav_amiga,
+                widget_key="_kool_nav_amiga_peek",
+                universe="amiga500",
+                name_columns={"player": "player_id"},
             )
             st.caption(
                 "**?** provisional (under "
