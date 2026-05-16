@@ -12,13 +12,15 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
 DEFAULT_JSON_PATH = PROJECT_ROOT / "retro_results.json"
 DEFAULT_DB_PATH = DATA_DIR / "retro_elo.sqlite3"
-# Offline KOATD tournaments (`import_koatd_offline`); unrelated to Joshua remote dump.
-OFFLINE_KOATD_DB_PATH = DATA_DIR / "offline_koatd.sqlite3"
-# Bundled CSV exports (commit these for Streamlit Cloud if you want the Offline KOATD tab there).
+# Amiga 500 event ratings: SQLite built from KOATD Access CSV exports (`import_koatd_offline`).
+# Separate from the online ladder DB (`DEFAULT_DB_PATH`).
+AMIGA500_DB_PATH = DATA_DIR / "offline_koatd.sqlite3"
+OFFLINE_KOATD_DB_PATH = AMIGA500_DB_PATH  # legacy alias
+# KOATD CSV exports (commit for Streamlit Cloud if you want Amiga 500 ratings there).
 KOATD_SCORES_EXPORT_CSV = DATA_DIR / "koatd_scores_export.csv"
 KOATD_TOURNAMENTS_EXPORT_CSV = DATA_DIR / "koatd_tournament_players_export.csv"
 
-# KO2 community JSON dump. Joshua scopes rows via `Q=`; defaults here match the known-working local URL (`Q=Dagh`).
+# Online ladder JSON dump (Joshua). Scopes rows via `Q=`; defaults match the known-working local URL (`Q=Dagh`).
 # Override any time with `KOOL_REMOTE_RESULTS_URL` (shell or Streamlit Secrets) if you deploy elsewhere.
 DEFAULT_REMOTE_RESULTS_URL = "https://joshua.kickoff2.net/db/AllResultsDump.php?Q=Dagh"
 REMOTE_RESULTS_MANIFEST_PATH = DATA_DIR / "results_sync_manifest.json"

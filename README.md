@@ -1,6 +1,6 @@
-# Kool Elo
+# Kick Off 2 ELO ratings
 
-GitHub: **[DaghN/kickoff2ELO](https://github.com/DaghN/kickoff2ELO)** — Python + SQLite Elo ratings tooling and a **[Streamlit](https://streamlit.io/)** explorer for Kick Off 2 retro head-to-head match dumps.
+GitHub: **[DaghN/kickoff2ELO](https://github.com/DaghN/kickoff2ELO)** — Python + SQLite ELO ratings tooling and a **[Streamlit](https://streamlit.io/)** explorer for Kick Off 2: **online** ladder ratings (JSON dump) and **Amiga 500** event ratings (KOATD CSV → SQLite).
 
 ---
 
@@ -11,7 +11,7 @@ GitHub: **[DaghN/kickoff2ELO](https://github.com/DaghN/kickoff2ELO)** — Python
 | `dashboard.py` | Streamlit UI (deploy this entry point on Streamlit Community Cloud). |
 | `requirements.txt` | Runtime dependencies (`pandas`, `streamlit`). |
 | `src/kool_elo/` | CLI modules: import JSON → SQLite, Elo replay, remote sync helpers. |
-| `data/` | Local SQLite (`retro_elo.sqlite3`) plus sync manifest — **heavy files stay untracked** (see `.gitignore`). |
+| `data/` | Local SQLite (online: `retro_elo.sqlite3`; Amiga 500: `offline_koatd.sqlite3`) plus sync manifest — **heavy files stay untracked** (see `.gitignore`). |
 
 ---
 
@@ -31,7 +31,7 @@ python -m kool_elo.import_matches --overwrite
 python -m kool_elo.compute_elo
 ```
 
-Large community JSON merges live at `retro_results.json` (ignored + usually downloaded by `sync_remote_results` / the dashboard).
+The online ladder JSON is merged at `retro_results.json` (ignored + usually downloaded by `sync_remote_results` / the dashboard).
 
 ---
 
@@ -52,7 +52,7 @@ Streamlit merges them into **`st.secrets`**; `dashboard.py` mirrors the keys lis
 Example `secrets.toml` (swap the URL string for your validated dump):
 
 ```toml
-KOOL_REMOTE_RESULTS_URL = "https://example.org/your/community/AllResultsDump.php"
+KOOL_REMOTE_RESULTS_URL = "https://example.org/your/online/AllResultsDump.php"
 # Optional single guarded auto bootstrap on empty Cloud sandbox (see README)
 KOOL_CLOUD_AUTO_BOOTSTRAP = "false"
 
@@ -63,14 +63,14 @@ KOOL_CLOUD_AUTO_BOOTSTRAP = "false"
 Important:
 
 - **`KOOL_REMOTE_RESULTS_URL`** — full HTTP(S) endpoint that returns **one JSON array** of rows with `GameID`, `StartTime`, `PlayerA`, `PlayerB`, `NameA`, `NameB`, `ScoreA`, `ScoreB`, `Duration`, etc.
-- The built-in default in [`src/kool_elo/config.py`](src/kool_elo/config.py) targets the **authorised community dump endpoint** for this project (including the `Q=` scope you use locally). Override with **`KOOL_REMOTE_RESULTS_URL`** in Secrets or env if Joshua issues a different URL or you intentionally switch accounts.
+- The built-in default in [`src/kool_elo/config.py`](src/kool_elo/config.py) targets the **authorised online ladder dump endpoint** for this project (including the `Q=` scope you use locally). Override with **`KOOL_REMOTE_RESULTS_URL`** in Secrets or env if Joshua issues a different URL or you intentionally switch accounts.
 
 ### First bootstrap on Cloud
 
 On a fresh dyno **`data/` is empty**, so **`retro_elo.sqlite3` doesn't exist**:
 
 1. Open the deployed URL.
-2. Use **Bootstrap SQLite from community dump** (downloads JSON + replay).
+2. Use **Bootstrap SQLite from online JSON** (downloads JSON + replay).
 3. Optionally set **`KOOL_CLOUD_AUTO_BOOTSTRAP`** to `true`; `dashboard.py` writes `data/.cloud_auto_bootstrap_attempted` so every new browser visitor does **not** re-download immediately. Delete that file if you interrupted a failed bootstrap and need automation to rerun on the **same** Cloud instance.
 
 Rebuilds mirror your local **`import_matches → compute_elo`** pipeline (`apply_import_and_elo` subprocess wrapper).

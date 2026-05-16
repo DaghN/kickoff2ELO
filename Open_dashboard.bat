@@ -1,5 +1,5 @@
 @echo off
-REM Double-click this file to launch the Kool Elo Streamlit dashboard.
+REM Double-click this file to launch the Kick Off 2 ELO ratings Streamlit dashboard.
 REM Folder with this BAT file = repo root (where dashboard.py lives).
 
 cd /d "%~dp0"

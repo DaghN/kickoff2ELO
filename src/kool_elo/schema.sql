@@ -1,4 +1,4 @@
--- Kool Elo — core relational schema (imports + ratings + provisional auditing)
+-- Kick Off 2 ELO ratings — core relational schema (imports + ratings + provisional auditing)
 -- SQLite: enable FK enforcement per connection (see import script).
 
 PRAGMA foreign_keys = ON;

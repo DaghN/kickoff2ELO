@@ -1,4 +1,4 @@
-# Kool Elo — project memory
+# Kick Off 2 ELO ratings — project memory
 
 Working log for decisions, parameters, and next steps. Updated as the project evolves.
 
@@ -9,7 +9,7 @@ Working log for decisions, parameters, and next steps. Updated as the project ev
 
 ## Requirements (agreed)
 
-- **Domain:** ELO-style ratings for ~80k Kick Off 2 (Amiga) head-to-head matches from `retro_results.json` (project root).
+- **Domain:** ELO-style Kick Off 2 ratings on two tracks: **online** ladder (`retro_results.json` → `retro_elo.sqlite3`) and **Amiga 500** events (KOATD Access CSV exports → `offline_koatd.sqlite3`). Player identities are **not linked** across tracks.
 - **Stack:** Python, SQLite, pandas; Streamlit dashboard for local exploration (**Stage 4**).
 - **Data model:** Relational SQLite schema — `players` and `games` (see **Database schema** below).
 - **ELO (implemented):** Simple win/draw/loss only (“classic” fractional scores 1 / ½ / 0); base rating **1600**, symmetric **K = 32**; no goal-difference modifier in v1. New-player / provisional handling intentionally deferred (“everyone starts at `BASE_RATING` until games move them”).
@@ -24,7 +24,7 @@ This repository is intentionally a **personal sandbox and proof of concept**, no
 - **Long term:** **Integrate with the community’s main app and website**, owned/maintained by **another developer**. Plan on **redoing much of the presentation and hosting** (their stack, auth, deploy, styling). What should carry over across that boundary: **rating rules**, **data shape / schema lessons**, **queries**, and **validated product ideas**—not necessarily Streamlit or this folder layout as-is.
 - **Roles (current assumption):** You act as **PoC / experiments** now; you may later **own a corner** of the public site; **integration** stays a joint effort with the primary maintainer.
 
-## Source file schema (`retro_results.json`)
+## Source file schema — online ladder (`retro_results.json`)
 
 Single JSON array. Each object (verified on sample):
 
@@ -81,7 +81,7 @@ CLI overrides (`compute_elo --base`, `--k`) replay the ladder without touching `
 
 ## Database schema (SQLite)
 
-File: `data/retro_elo.sqlite3` (gitignored). Created by `schema.sql`; older DBs pick up deltas via `schema_migrations.ensure_stage2_rating_columns`.
+File: `data/retro_elo.sqlite3` (online ladder; gitignored). Amiga 500 ratings use `data/offline_koatd.sqlite3` from KOATD CSV import. Created by `schema.sql`; older DBs pick up deltas via `schema_migrations.ensure_stage2_rating_columns`.
 
 **`players`**
 

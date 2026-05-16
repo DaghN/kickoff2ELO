@@ -1,4 +1,4 @@
-"""Fetch Kick Off JSON result dumps from the community site.
+"""Fetch Kick Off 2 online ladder JSON dumps (Joshua / forum ecosystem).
 
 The upstream server (as of testing) omits ``ETag`` / ``Last-Modified`` headers, so
 each sync still **downloads the full JSON body** to detect changes. We **skip**
@@ -31,7 +31,7 @@ from kool_elo.config import (
 )
 
 _FETCH_TIMEOUT_SEC = float(os.environ.get("KOOL_RESULTS_FETCH_TIMEOUT", "300"))
-_USER_AGENT = "KoolElo-results-sync/1.0 (local dev; +https://github.com/)"
+_USER_AGENT = "KickOff2-ELO-ratings-results-sync/1.0 (local dev; +https://github.com/)"
 
 
 @dataclass
@@ -242,7 +242,7 @@ def apply_import_and_elo(db_path: Path | None = None) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Download community JSON results, merge into retro_results.json, optionally rebuild DB."
+        description="Download online ladder JSON, merge into retro_results.json, optionally rebuild DB."
     )
     parser.add_argument(
         "--url",

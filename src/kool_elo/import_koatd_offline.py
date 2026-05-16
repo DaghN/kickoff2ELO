@@ -1,6 +1,6 @@
-"""Build standalone offline SQLite (`players`/`games`) from KOATD CSV exports.
+"""Build Amiga 500 SQLite (`players`/`games`) from KOATD CSV exports.
 
-Uses the same ``schema.sql`` layout as online retro imports. Tournament dates come from
+Uses the same ``schema.sql`` layout as the online ladder import. Tournament dates come from
 the ``Tournament players`` CSV; fixtures from ``Scores``.
 
 Example::
@@ -14,7 +14,7 @@ Then::
 Ordering heuristic: tournament ``Date`` gives the calendar day; games inside a tournament
 use ``Scores.ID`` for stable ordering inside the pseudo-timestamps (+0,+1,+2… seconds).
 
-``duration_secs`` is ``0`` (offline dump has no durations).
+``duration_secs`` is ``0`` (KOATD CSV export has no durations).
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ DEFAULT_DB_PATH = PROJECT_ROOT / "data" / "offline_koatd.sqlite3"
 
 
 def _player_id_stub(display_name: str) -> str:
-    """Stable surrogate id from normalised spelling (offline-only identifiers)."""
+    """Stable surrogate id from normalised spelling (Amiga 500 / KOATD pipeline only)."""
 
     norm = " ".join(str(display_name).strip().split()).lower().encode("utf-8")
     return "oko2_" + hashlib.sha256(norm).hexdigest()[:22]
@@ -169,10 +169,10 @@ def load_koatd_csvs(
     sb = pd.to_numeric(sc_good["B"], errors="coerce").astype("Int64")
     bad_nums = sa.isna() | sb.isna()
     if bad_nums.any():
-        raise ValueError(f"Non-numeric offline scores on {int(bad_nums.sum())} row(s).")
+        raise ValueError(f"Non-numeric scores in KOATD CSV on {int(bad_nums.sum())} row(s).")
 
     if ((sa < 0) | (sb < 0)).any():
-        raise ValueError("Negative offline scores.")
+        raise ValueError("Negative scores in KOATD CSV.")
 
     pid_a = [_player_id_stub(x) for x in sc_good["Team A"].astype(str)]
     pid_b = [_player_id_stub(x) for x in sc_good["Team B"].astype(str)]
@@ -209,7 +209,7 @@ def import_koatd_to_sqlite(
     overwrite: bool,
     schema_path: Path | None = None,
 ) -> dict[str, int]:
-    """Create offline SQLite identical shape to retro import pipeline."""
+    """Create Amiga 500 SQLite with identical shape to the online ladder import pipeline."""
 
     if schema_path is None:
         schema_path = Path(__file__).resolve().parent / "schema.sql"
@@ -240,7 +240,7 @@ def import_koatd_to_sqlite(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Import KOATD CSV exports into offline SQLite (retro-compatible schema)."
+        description="Import KOATD CSV exports into Amiga 500 SQLite (same schema as online ladder)."
     )
     parser.add_argument(
         "--scores",
@@ -281,7 +281,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Import failed: {exc}", file=sys.stderr)
         return 1
 
-    print("Offline KOATD import complete.")
+    print("KOATD → Amiga 500 SQLite import complete.")
     for key, val in sorted(stats.items()):
         print(f"  {key}: {val}")
     print(f"Database: {args.db}")

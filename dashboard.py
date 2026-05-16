@@ -1,5 +1,5 @@
 """
-Kool Elo — Streamlit dashboard (Stage 4).
+Kick Off 2 ELO ratings — Streamlit dashboard.
 
 Run from project root:
 
@@ -37,13 +37,13 @@ from kool_elo.config import (
     resolved_remote_results_url,
 )
 
-# Support older `config.py` copies that predate offline KOATD (avoids ImportError).
+# Support older `config.py` copies that predate `AMIGA500_DB_PATH` (avoids ImportError).
 import kool_elo.config as _kool_config
 
-OFFLINE_KOATD_DB_PATH = getattr(
+AMIGA500_DB_PATH = getattr(
     _kool_config,
-    "OFFLINE_KOATD_DB_PATH",
-    _kool_config.DATA_DIR / "offline_koatd.sqlite3",
+    "AMIGA500_DB_PATH",
+    getattr(_kool_config, "OFFLINE_KOATD_DB_PATH", _kool_config.DATA_DIR / "offline_koatd.sqlite3"),
 )
 KOATD_SCORES_EXPORT_CSV = getattr(
     _kool_config,
@@ -227,14 +227,14 @@ def recent_games(db_path_str: str, limit: int = 200) -> pd.DataFrame:
 
 def run_import_koatd_offline_bundle(
     *,
-    offline_db: Path,
+    sqlite_path: Path,
     scores_csv: Path,
     tournaments_csv: Path,
     base: float,
     k: float,
     use_provisional_dual_k: bool,
 ) -> None:
-    """Rebuild `offline_db` from Access CSV dumps, then replay Elo (same K settings as sidebar)."""
+    """Rebuild Amiga 500 SQLite from KOATD CSV dumps, then replay Elo (same K settings as sidebar)."""
 
     env = os.environ.copy()
     env["PYTHONPATH"] = str(PROJECT_ROOT / "src")
@@ -249,14 +249,14 @@ def run_import_koatd_offline_bundle(
             "--tournaments",
             str(tournaments_csv.resolve()),
             "--db",
-            str(offline_db.resolve()),
+            str(sqlite_path.resolve()),
         ],
         cwd=str(PROJECT_ROOT),
         env=env,
         check=True,
     )
     run_compute_elo(
-        offline_db,
+        sqlite_path,
         base,
         k,
         use_provisional_dual_k=use_provisional_dual_k,
@@ -298,20 +298,16 @@ def _env_truthy(name: str) -> bool:
 
 
 def main() -> None:
-    st.set_page_config(page_title="Kool Elo", layout="wide")
+    st.set_page_config(page_title="Kick Off 2 ELO ratings", layout="wide")
     _mirror_streamlit_secrets_to_environment()
-    st.title("Kool Elo — Kick Off 2 ratings")
+    st.title("Kick Off 2 ELO ratings")
 
-    browse_offline = st.radio(
+    browse_amiga500 = st.radio(
         "Data source",
-        options=["Community ratings (online DB)", "KOATD offline snapshot"],
+        options=["Online", "Amiga 500"],
         horizontal=True,
         key="_kool_browse_source",
-        help=(
-            "Community uses `retro_elo.sqlite3` fed by the remote JSON dump. "
-            "KOATD offline uses `offline_koatd.sqlite3` from Access CSV exports."
-        ),
-    ) == "KOATD offline snapshot"
+    ) == "Amiga 500"
 
     st.sidebar.header("Data")
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -320,28 +316,28 @@ def main() -> None:
 
     db_default = str(DEFAULT_DB_PATH.resolve())
     db_input = st.sidebar.text_input(
-        "SQLite database (community)",
+        "SQLite database (online)",
         value=db_default,
-        disabled=browse_offline,
-        help="Path to `retro_elo.sqlite3` (ignored while browsing KOATD offline).",
+        disabled=browse_amiga500,
+        help="Path to `retro_elo.sqlite3` (ignored while browsing Amiga 500).",
     )
     db_path = Path(db_input).expanduser().resolve()
-    off_path = OFFLINE_KOATD_DB_PATH.resolve()
+    amiga500_path = AMIGA500_DB_PATH.resolve()
 
-    if browse_offline:
-        if not off_path.is_file():
+    if browse_amiga500:
+        if not amiga500_path.is_file():
             st.warning(
-                f"KOATD offline SQLite not found (`{off_path}`). Build it from bundled CSVs "
+                f"Amiga 500 SQLite not found (`{amiga500_path}`). Build it from KOATD CSV bundles "
                 "or import locally, then refresh."
             )
             bundled_scores = KOATD_SCORES_EXPORT_CSV.resolve()
             bundled_tours = KOATD_TOURNAMENTS_EXPORT_CSV.resolve()
             if bundled_scores.is_file() and bundled_tours.is_file():
-                if st.button("Build KOATD database from bundled CSV exports", key="_kool_gate_build_koatd"):
+                if st.button("Build Amiga 500 database from KOATD CSV exports", key="_kool_gate_build_amiga500"):
                     try:
                         with st.spinner("Importing KOATD CSV → SQLite → Elo replay …"):
                             run_import_koatd_offline_bundle(
-                                offline_db=OFFLINE_KOATD_DB_PATH,
+                                sqlite_path=AMIGA500_DB_PATH,
                                 scores_csv=bundled_scores,
                                 tournaments_csv=bundled_tours,
                                 base=float(BASE_RATING),
@@ -351,10 +347,10 @@ def main() -> None:
                                 ),
                             )
                     except subprocess.CalledProcessError as exc:
-                        st.error(f"KOATD build failed (exit {exc.returncode}).")
+                        st.error(f"Import failed (exit {exc.returncode}).")
                         st.stop()
                     st.cache_data.clear()
-                    st.success("Offline KOATD database built.")
+                    st.success("Amiga 500 database built.")
                     st.rerun()
             else:
                 st.markdown(
@@ -374,20 +370,20 @@ def main() -> None:
     elif not db_path.is_file():
         st.warning(
             f"SQLite not found yet (`{db_path}`). Streamlit Cloud starts without your local `data/*.sqlite3`; "
-            "pull the JSON once and replay into SQLite below."
+            "pull the online ladder JSON once and replay into SQLite below."
         )
         boot_input = st.text_input(
-            "Community dump URL (bootstrap)",
+            "Online ladder JSON URL (bootstrap)",
             value=resolved_remote_results_url(),
             help="Override with env `KOOL_REMOTE_RESULTS_URL` or Streamlit secret of the same name.",
             key="_kool_cloud_bootstrap_dump_url",
         )
         tip = """
-**First‑time bootstrap** downloads the full community JSON and replays imports + Elo (may take minutes and can hit hosted timeouts on very large payloads).
+**First‑time bootstrap** downloads the online ladder JSON and replays imports + Elo (may take minutes and can hit hosted timeouts on very large payloads).
 
 Suggested Cloud setup: paste the validated dump URL under **Secrets** as `KOOL_REMOTE_RESULTS_URL`.
 
-If `KOOL_CLOUD_AUTO_BOOTSTRAP` is `true`, automation runs **once per Cloud sandbox** (`data/.cloud_auto_bootstrap_attempted` keeps every new browser tab from restarting the downloader). Delete that file if you need to rerun automation without pushing a redeploy—the Community Cloud filesystem is short-lived anyway.
+If `KOOL_CLOUD_AUTO_BOOTSTRAP` is `true`, automation runs **once per Cloud sandbox** (`data/.cloud_auto_bootstrap_attempted` keeps every new browser tab from restarting the downloader). Delete that file if you need to rerun automation without pushing a redeploy—the Streamlit Cloud filesystem is short-lived anyway.
 """
         st.markdown(tip)
 
@@ -412,7 +408,7 @@ If `KOOL_CLOUD_AUTO_BOOTSTRAP` is `true`, automation runs **once per Cloud sandb
                 st.success("SQLite ready.")
                 st.rerun()
 
-        if st.button("Bootstrap SQLite from community dump", type="primary"):
+        if st.button("Bootstrap SQLite from online JSON", type="primary"):
             try:
                 with st.spinner("Downloading + import + replay — patience …"):
                     _bootstrap_db_from_remote(
@@ -429,18 +425,18 @@ If `KOOL_CLOUD_AUTO_BOOTSTRAP` is `true`, automation runs **once per Cloud sandb
 
         st.stop()
 
-    active_db = off_path if browse_offline else db_path
+    active_db = amiga500_path if browse_amiga500 else db_path
     _apply_elo_migrations(active_db)
 
     if (
-        not browse_offline
+        not browse_amiga500
         and _env_truthy("KOOL_AUTO_SYNC_ON_START")
         and not st.session_state.get("_kool_remote_autosync_once")
     ):
         st.session_state["_kool_remote_autosync_once"] = True
         boot_url = resolved_remote_results_url()
         try:
-            with st.spinner("Checking community results dump (downloads full JSON)…"):
+            with st.spinner("Checking online ladder JSON (downloads full payload)…"):
                 stats_boot = sync_remote_results(
                     url=boot_url,
                     out_path=json_out,
@@ -466,12 +462,12 @@ If `KOOL_CLOUD_AUTO_BOOTSTRAP` is `true`, automation runs **once per Cloud sandb
             st.sidebar.warning(f"Automatic remote sync failed: {exc}")
 
     st.sidebar.markdown("---")
-    if browse_offline:
+    if browse_amiga500:
         st.sidebar.info(
-            "Browsing **KOATD offline** (`offline_koatd.sqlite3`). Community JSON sync is hidden."
+            "Browsing **Amiga 500** (`offline_koatd.sqlite3`). Online JSON sync is hidden."
         )
     else:
-        st.sidebar.subheader("Community JSON")
+        st.sidebar.subheader("Online ladder JSON")
         st.sidebar.caption(
             "Joshua serves the full payload each visit (no etag). We SHA-256 the body "
             "and skip SQLite work when nothing changed. "
@@ -592,15 +588,12 @@ If `KOOL_CLOUD_AUTO_BOOTSTRAP` is `true`, automation runs **once per Cloud sandb
 
     db_key = str(active_db)
 
-    src_short = "KOATD offline" if browse_offline else "Community online"
-    st.caption(f"**Active data:** {src_short} · `{active_db}`")
-
     players_df = fetch_players(db_key)
     games_agg = fetch_games_agg(db_key)
 
-    koatd_tab_label = "KOATD tools" if browse_offline else "Offline KOATD"
-    overview_tab, board_tab, history_tab, recent_tab, offline_tab = st.tabs(
-        ["Overview", "Leaderboard", "Rating history", "Recent games", koatd_tab_label]
+    amiga500_tools_tab_label = "Amiga 500 tools" if browse_amiga500 else "Amiga 500"
+    overview_tab, board_tab, history_tab, recent_tab, amiga500_tab = st.tabs(
+        ["Overview", "Leaderboard", "Rating history", "Recent games", amiga500_tools_tab_label]
     )
 
     with overview_tab:
@@ -749,30 +742,30 @@ If `KOOL_CLOUD_AUTO_BOOTSTRAP` is `true`, automation runs **once per Cloud sandb
         recent = recent_games(db_key, limit=200)
         st.dataframe(recent, use_container_width=True, hide_index=True)
 
-    with offline_tab:
-        st.subheader("KOATD offline")
+    with amiga500_tab:
+        st.subheader("Amiga 500")
         st.caption(
-            "Separate SQLite built from Access exports (`Scores` + `Tournament players`). "
+            "SQLite from KOATD Access CSV exports (`Scores` + `Tournament players`). "
             "`start_time` is tournament calendar day + intra-event ordering (not precise kickoff)."
         )
         bundled_scores = KOATD_SCORES_EXPORT_CSV.resolve()
         bundled_tours = KOATD_TOURNAMENTS_EXPORT_CSV.resolve()
 
-        if browse_offline:
+        if browse_amiga500:
             st.info(
                 "You’re browsing this database everywhere (**Overview** through **Recent games**). "
                 "Use **Run full replay** in the sidebar after changing base/K, or rebuild from CSV below."
             )
-            st.markdown(f"**Path:** `{off_path.resolve()}`")
+            st.markdown(f"**Path:** `{amiga500_path.resolve()}`")
             if bundled_scores.is_file() and bundled_tours.is_file():
                 if st.button(
-                    "Rebuild KOATD SQLite from bundled CSV exports",
-                    key="_kool_koatd_rebuild_while_global",
+                    "Rebuild Amiga 500 SQLite from KOATD CSV exports",
+                    key="_kool_amiga500_rebuild_while_global",
                 ):
                     try:
-                        with st.spinner("Re-import CSV → SQLite → Elo replay …"):
+                        with st.spinner("Re-import KOATD CSV → SQLite → Elo replay …"):
                             run_import_koatd_offline_bundle(
-                                offline_db=OFFLINE_KOATD_DB_PATH,
+                                sqlite_path=AMIGA500_DB_PATH,
                                 scores_csv=bundled_scores,
                                 tournaments_csv=bundled_tours,
                                 base=base,
@@ -780,17 +773,17 @@ If `KOOL_CLOUD_AUTO_BOOTSTRAP` is `true`, automation runs **once per Cloud sandb
                                 use_provisional_dual_k=use_dual_k,
                             )
                     except subprocess.CalledProcessError as exc:
-                        st.error(f"KOATD rebuild failed (exit {exc.returncode}).")
+                        st.error(f"Rebuild failed (exit {exc.returncode}).")
                         st.stop()
                     st.cache_data.clear()
-                    st.success("KOATD database rebuilt.")
+                    st.success("Amiga 500 database rebuilt.")
                     st.rerun()
             else:
                 st.caption(
                     "No bundled `koatd_scores_export.csv` + `koatd_tournament_players_export.csv` next to this app — "
-                    "re-import locally if you need a fresh offline build."
+                    "re-import locally if you need a fresh Amiga 500 build."
                 )
-        elif not off_path.is_file():
+        elif not amiga500_path.is_file():
             st.markdown(
                 "**Streamlit Cloud** only sees files pushed to GitHub. "
                 "`offline_koatd.sqlite3` is gitignored locally, so the hosted app never receives it unless you rebuild on Cloud "
@@ -801,11 +794,11 @@ If `KOOL_CLOUD_AUTO_BOOTSTRAP` is `true`, automation runs **once per Cloud sandb
                     "Bundled KOATD CSVs were found in the repo (`data/`). "
                     "You can build the SQLite database once inside this deployment."
                 )
-                if st.button("Build KOATD database from bundled CSV exports", key="_kool_cloud_build_koatd"):
+                if st.button("Build Amiga 500 database from KOATD CSV exports", key="_kool_cloud_build_amiga500"):
                     try:
                         with st.spinner("Importing KOATD CSV → SQLite → Elo replay (may take a minute on Cloud)…"):
                             run_import_koatd_offline_bundle(
-                                offline_db=OFFLINE_KOATD_DB_PATH,
+                                sqlite_path=AMIGA500_DB_PATH,
                                 scores_csv=bundled_scores,
                                 tournaments_csv=bundled_tours,
                                 base=base,
@@ -813,15 +806,15 @@ If `KOOL_CLOUD_AUTO_BOOTSTRAP` is `true`, automation runs **once per Cloud sandb
                                 use_provisional_dual_k=use_dual_k,
                             )
                     except subprocess.CalledProcessError as exc:
-                        st.error(f"KOATD build failed (exit {exc.returncode}).")
+                        st.error(f"Import failed (exit {exc.returncode}).")
                         st.stop()
                     st.cache_data.clear()
-                    st.success("Offline KOATD database built.")
+                    st.success("Amiga 500 database built.")
                     st.rerun()
 
             else:
                 st.info(
-                    "No offline SQLite yet — and no **`data/koatd_scores_export.csv`** "
+                    "No Amiga 500 SQLite yet — and no **`data/koatd_scores_export.csv`** "
                     "**+ `data/koatd_tournament_players_export.csv`** in this deployment "
                     "(commit them from your PC after `EXPORT_KOATD.bat`).\n\n"
                     "Alternatively, from the repo root locally:\n\n"
@@ -829,23 +822,23 @@ If `KOOL_CLOUD_AUTO_BOOTSTRAP` is `true`, automation runs **once per Cloud sandb
                     "PYTHONPATH=src python -m kool_elo.compute_elo --db data/offline_koatd.sqlite3\n```"
                 )
                 st.caption(
-                    "Tip: switch **Data source** to **KOATD offline snapshot** after building to browse that dataset globally."
+                    "Switch **Data source** to **Amiga 500** after building to browse that dataset everywhere."
                 )
         else:
-            _apply_elo_migrations(off_path)
-            offline_key = str(off_path)
-            offline_players = fetch_players(offline_key)
-            offline_games = fetch_games_agg(offline_key)
+            _apply_elo_migrations(amiga500_path)
+            amiga500_key = str(amiga500_path)
+            amiga500_players = fetch_players(amiga500_key)
+            amiga500_games = fetch_games_agg(amiga500_key)
             st.caption(
-                "Peek at KOATD without switching the global source, or switch **Data source** above to browse KOATD everywhere."
+                "Peek at Amiga 500 without switching the global source, or choose **Amiga 500** above to browse it everywhere."
             )
             c1, c2, c3 = st.columns(3)
-            c1.metric("Players", f"{len(offline_players):,}")
-            c2.metric("Games", f"{int(offline_games['games']):,}")
-            c3.metric("First → last", (offline_games["first_ts"] or "—") + " → " + (offline_games["last_ts"] or "—"))
+            c1.metric("Players", f"{len(amiga500_players):,}")
+            c2.metric("Games", f"{int(amiga500_games['games']):,}")
+            c3.metric("First → last", (amiga500_games["first_ts"] or "—") + " → " + (amiga500_games["last_ts"] or "—"))
 
-            fq = st.text_input("Filter name", value="", key="_kool_offline_name_filter")
-            view_o = offline_players
+            fq = st.text_input("Filter name", value="", key="_kool_amiga500_name_filter")
+            view_o = amiga500_players
             if fq.strip():
                 nm = fq.strip().lower()
                 view_o = view_o.loc[view_o["display_name"].str.lower().str.contains(nm, na=False)]

@@ -1,5 +1,5 @@
 """
-Load retro_results.json into SQLite (players + games).
+Load online ladder JSON (`retro_results.json`) into SQLite (players + games).
 
 Usage (from project root, with PYTHONPATH including ./src):
 
@@ -184,7 +184,7 @@ def import_to_sqlite(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Import retro_results.json into SQLite.")
+    parser = argparse.ArgumentParser(description="Import online ladder JSON (retro_results.json) into SQLite.")
     parser.add_argument(
         "--json",
         type=Path,
