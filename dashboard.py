@@ -302,16 +302,76 @@ def main() -> None:
     _mirror_streamlit_secrets_to_environment()
     st.title("Kool Elo — Kick Off 2 ratings")
 
+    browse_offline = st.radio(
+        "Data source",
+        options=["Community ratings (online DB)", "KOATD offline snapshot"],
+        horizontal=True,
+        key="_kool_browse_source",
+        help=(
+            "Community uses `retro_elo.sqlite3` fed by the remote JSON dump. "
+            "KOATD offline uses `offline_koatd.sqlite3` from Access CSV exports."
+        ),
+    ) == "KOATD offline snapshot"
+
     st.sidebar.header("Data")
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
     json_out = DEFAULT_JSON_PATH.resolve()
 
     db_default = str(DEFAULT_DB_PATH.resolve())
-    db_input = st.sidebar.text_input("SQLite database", value=db_default)
+    db_input = st.sidebar.text_input(
+        "SQLite database (community)",
+        value=db_default,
+        disabled=browse_offline,
+        help="Path to `retro_elo.sqlite3` (ignored while browsing KOATD offline).",
+    )
     db_path = Path(db_input).expanduser().resolve()
+    off_path = OFFLINE_KOATD_DB_PATH.resolve()
 
-    if not db_path.is_file():
+    if browse_offline:
+        if not off_path.is_file():
+            st.warning(
+                f"KOATD offline SQLite not found (`{off_path}`). Build it from bundled CSVs "
+                "or import locally, then refresh."
+            )
+            bundled_scores = KOATD_SCORES_EXPORT_CSV.resolve()
+            bundled_tours = KOATD_TOURNAMENTS_EXPORT_CSV.resolve()
+            if bundled_scores.is_file() and bundled_tours.is_file():
+                if st.button("Build KOATD database from bundled CSV exports", key="_kool_gate_build_koatd"):
+                    try:
+                        with st.spinner("Importing KOATD CSV → SQLite → Elo replay …"):
+                            run_import_koatd_offline_bundle(
+                                offline_db=OFFLINE_KOATD_DB_PATH,
+                                scores_csv=bundled_scores,
+                                tournaments_csv=bundled_tours,
+                                base=float(BASE_RATING),
+                                k=float(K_FACTOR),
+                                use_provisional_dual_k=bool(
+                                    st.session_state.get("_kool_provisional_dual_k", PROVISIONAL_DUAL_K_ENABLED)
+                                ),
+                            )
+                    except subprocess.CalledProcessError as exc:
+                        st.error(f"KOATD build failed (exit {exc.returncode}).")
+                        st.stop()
+                    st.cache_data.clear()
+                    st.success("Offline KOATD database built.")
+                    st.rerun()
+            else:
+                st.markdown(
+                    "**Streamlit Cloud** only sees files pushed to GitHub. "
+                    "`offline_koatd.sqlite3` is gitignored locally, so the hosted app never receives it unless you rebuild on Cloud "
+                    "(or force-add the DB)."
+                )
+                st.info(
+                    "No bundled **`data/koatd_scores_export.csv`** "
+                    "**+ `data/koatd_tournament_players_export.csv`** in this deployment "
+                    "(commit them from your PC after `EXPORT_KOATD.bat`).\n\n"
+                    "Alternatively, from the repo root locally:\n\n"
+                    "```\nPYTHONPATH=src python -m kool_elo.import_koatd_offline --overwrite\n"
+                    "PYTHONPATH=src python -m kool_elo.compute_elo --db data/offline_koatd.sqlite3\n```"
+                )
+            st.stop()
+    elif not db_path.is_file():
         st.warning(
             f"SQLite not found yet (`{db_path}`). Streamlit Cloud starts without your local `data/*.sqlite3`; "
             "pull the JSON once and replay into SQLite below."
@@ -369,10 +429,13 @@ If `KOOL_CLOUD_AUTO_BOOTSTRAP` is `true`, automation runs **once per Cloud sandb
 
         st.stop()
 
-    _apply_elo_migrations(db_path)
+    active_db = off_path if browse_offline else db_path
+    _apply_elo_migrations(active_db)
 
-    if _env_truthy("KOOL_AUTO_SYNC_ON_START") and not st.session_state.get(
-        "_kool_remote_autosync_once"
+    if (
+        not browse_offline
+        and _env_truthy("KOOL_AUTO_SYNC_ON_START")
+        and not st.session_state.get("_kool_remote_autosync_once")
     ):
         st.session_state["_kool_remote_autosync_once"] = True
         boot_url = resolved_remote_results_url()
@@ -403,81 +466,87 @@ If `KOOL_CLOUD_AUTO_BOOTSTRAP` is `true`, automation runs **once per Cloud sandb
             st.sidebar.warning(f"Automatic remote sync failed: {exc}")
 
     st.sidebar.markdown("---")
-    st.sidebar.subheader("Community JSON")
-    st.sidebar.caption(
-        "Joshua serves the full payload each visit (no etag). We SHA-256 the body "
-        "and skip SQLite work when nothing changed. "
-        "`KOOL_REMOTE_RESULTS_URL` overrides the default URL."
-    )
-    dump_url = st.sidebar.text_input(
-        "Dump URL",
-        value=resolved_remote_results_url(),
-        help="Override with env `KOOL_REMOTE_RESULTS_URL` or Streamlit secret of the same name.",
-    )
-    replace_local = st.sidebar.checkbox(
-        "Replace local JSON (remote only)",
-        value=False,
-        help="Deletes local-only rows until the next merge.",
-    )
-    force_fetch_sidebar = st.sidebar.checkbox(
-        "Ignore hash / re-merge anyway",
-        value=False,
-    )
-    rebuild_after_sync = st.sidebar.checkbox(
-        "After sync: import_matches + compute_elo",
-        value=True,
-    )
-    if st.session_state.get("_kool_json_refresh_pending"):
+    if browse_offline:
         st.sidebar.info(
-            "JSON on disk may be newer than SQLite (auto-sync without "
-            "`KOOL_AUTO_SYNC_APPLY`). Pull again with ✓ rebuild or toggle env."
+            "Browsing **KOATD offline** (`offline_koatd.sqlite3`). Community JSON sync is hidden."
         )
-    if st.sidebar.button("Sync now"):
-        with st.spinner("Fetching dump + merging locally…"):
-            try:
-                stats = sync_remote_results(
-                    url=dump_url.strip(),
-                    out_path=json_out,
-                    replace_local=replace_local,
-                    force_fetch=force_fetch_sidebar,
-                )
-            except Exception as exc:  # noqa: BLE001
-                st.sidebar.error(f"{type(exc).__name__}: {exc}")
-            else:
-                if stats.payload_unchanged:
-                    st.sidebar.success(
-                        "Remote body matches last SHA-256 — skipping JSON rewrite."
+    else:
+        st.sidebar.subheader("Community JSON")
+        st.sidebar.caption(
+            "Joshua serves the full payload each visit (no etag). We SHA-256 the body "
+            "and skip SQLite work when nothing changed. "
+            "`KOOL_REMOTE_RESULTS_URL` overrides the default URL."
+        )
+        dump_url = st.sidebar.text_input(
+            "Dump URL",
+            value=resolved_remote_results_url(),
+            help="Override with env `KOOL_REMOTE_RESULTS_URL` or Streamlit secret of the same name.",
+        )
+        replace_local = st.sidebar.checkbox(
+            "Replace local JSON (remote only)",
+            value=False,
+            help="Deletes local-only rows until the next merge.",
+        )
+        force_fetch_sidebar = st.sidebar.checkbox(
+            "Ignore hash / re-merge anyway",
+            value=False,
+        )
+        rebuild_after_sync = st.sidebar.checkbox(
+            "After sync: import_matches + compute_elo",
+            value=True,
+        )
+        if st.session_state.get("_kool_json_refresh_pending"):
+            st.sidebar.info(
+                "JSON on disk may be newer than SQLite (auto-sync without "
+                "`KOOL_AUTO_SYNC_APPLY`). Pull again with ✓ rebuild or toggle env."
+            )
+        if st.sidebar.button("Sync now"):
+            with st.spinner("Fetching dump + merging locally…"):
+                try:
+                    stats = sync_remote_results(
+                        url=dump_url.strip(),
+                        out_path=json_out,
+                        replace_local=replace_local,
+                        force_fetch=force_fetch_sidebar,
                     )
+                except Exception as exc:  # noqa: BLE001
+                    st.sidebar.error(f"{type(exc).__name__}: {exc}")
                 else:
-                    parts = [
-                        f"remote rows: {stats.remote_rows:,}",
-                        f"merged: {stats.merged_rows:,}",
-                        f"added GameIDs: +{stats.added_ids:,}",
-                        f"updates: {stats.updated_rows:,}",
-                        f"wrote JSON: {'yes' if stats.wrote_file else 'no'}",
-                    ]
-                    st.sidebar.success(" · ".join(parts))
-                    changed_local = (
-                        stats.wrote_file
-                        or stats.added_ids
-                        or stats.updated_rows
-                        or replace_local
-                    )
-                    if rebuild_after_sync and changed_local:
-                        with st.spinner("import_matches + compute_elo …"):
-                            try:
-                                apply_import_and_elo(db_path=db_path)
-                            except subprocess.CalledProcessError:
-                                st.sidebar.error("Rebuild pipeline failed.")
-                                st.stop()
-                        st.session_state.pop("_kool_json_refresh_pending", None)
-                    elif changed_local:
-                        st.session_state["_kool_json_refresh_pending"] = True
-                    st.cache_data.clear()
-                    st.rerun()
+                    if stats.payload_unchanged:
+                        st.sidebar.success(
+                            "Remote body matches last SHA-256 — skipping JSON rewrite."
+                        )
+                    else:
+                        parts = [
+                            f"remote rows: {stats.remote_rows:,}",
+                            f"merged: {stats.merged_rows:,}",
+                            f"added GameIDs: +{stats.added_ids:,}",
+                            f"updates: {stats.updated_rows:,}",
+                            f"wrote JSON: {'yes' if stats.wrote_file else 'no'}",
+                        ]
+                        st.sidebar.success(" · ".join(parts))
+                        changed_local = (
+                            stats.wrote_file
+                            or stats.added_ids
+                            or stats.updated_rows
+                            or replace_local
+                        )
+                        if rebuild_after_sync and changed_local:
+                            with st.spinner("import_matches + compute_elo …"):
+                                try:
+                                    apply_import_and_elo(db_path=db_path)
+                                except subprocess.CalledProcessError:
+                                    st.sidebar.error("Rebuild pipeline failed.")
+                                    st.stop()
+                            st.session_state.pop("_kool_json_refresh_pending", None)
+                        elif changed_local:
+                            st.session_state["_kool_json_refresh_pending"] = True
+                        st.cache_data.clear()
+                        st.rerun()
 
     st.sidebar.markdown("---")
     st.sidebar.subheader("Recompute Elo")
+    st.sidebar.caption(f"Target database: `{active_db.name}`")
     if "_kool_provisional_dual_k" not in st.session_state:
         st.session_state["_kool_provisional_dual_k"] = PROVISIONAL_DUAL_K_ENABLED
     use_dual_k = st.sidebar.checkbox(
@@ -508,7 +577,7 @@ If `KOOL_CLOUD_AUTO_BOOTSTRAP` is `true`, automation runs **once per Cloud sandb
         with st.spinner("Replaying every game — this can take a few seconds…"):
             try:
                 run_compute_elo(
-                    db_path,
+                    active_db,
                     base,
                     k_factor,
                     use_provisional_dual_k=use_dual_k,
@@ -521,13 +590,17 @@ If `KOOL_CLOUD_AUTO_BOOTSTRAP` is `true`, automation runs **once per Cloud sandb
                 st.sidebar.success("Replay finished — refreshing views.")
                 st.rerun()
 
-    db_key = str(db_path)
+    db_key = str(active_db)
+
+    src_short = "KOATD offline" if browse_offline else "Community online"
+    st.caption(f"**Active data:** {src_short} · `{active_db}`")
 
     players_df = fetch_players(db_key)
     games_agg = fetch_games_agg(db_key)
 
+    koatd_tab_label = "KOATD tools" if browse_offline else "Offline KOATD"
     overview_tab, board_tab, history_tab, recent_tab, offline_tab = st.tabs(
-        ["Overview", "Leaderboard", "Rating history", "Recent games", "Offline KOATD"]
+        ["Overview", "Leaderboard", "Rating history", "Recent games", koatd_tab_label]
     )
 
     with overview_tab:
@@ -682,10 +755,42 @@ If `KOOL_CLOUD_AUTO_BOOTSTRAP` is `true`, automation runs **once per Cloud sandb
             "Separate SQLite built from Access exports (`Scores` + `Tournament players`). "
             "`start_time` is tournament calendar day + intra-event ordering (not precise kickoff)."
         )
-        off_path = OFFLINE_KOATD_DB_PATH.resolve()
         bundled_scores = KOATD_SCORES_EXPORT_CSV.resolve()
         bundled_tours = KOATD_TOURNAMENTS_EXPORT_CSV.resolve()
-        if not off_path.is_file():
+
+        if browse_offline:
+            st.info(
+                "You’re browsing this database everywhere (**Overview** through **Recent games**). "
+                "Use **Run full replay** in the sidebar after changing base/K, or rebuild from CSV below."
+            )
+            st.markdown(f"**Path:** `{off_path.resolve()}`")
+            if bundled_scores.is_file() and bundled_tours.is_file():
+                if st.button(
+                    "Rebuild KOATD SQLite from bundled CSV exports",
+                    key="_kool_koatd_rebuild_while_global",
+                ):
+                    try:
+                        with st.spinner("Re-import CSV → SQLite → Elo replay …"):
+                            run_import_koatd_offline_bundle(
+                                offline_db=OFFLINE_KOATD_DB_PATH,
+                                scores_csv=bundled_scores,
+                                tournaments_csv=bundled_tours,
+                                base=base,
+                                k=k_factor,
+                                use_provisional_dual_k=use_dual_k,
+                            )
+                    except subprocess.CalledProcessError as exc:
+                        st.error(f"KOATD rebuild failed (exit {exc.returncode}).")
+                        st.stop()
+                    st.cache_data.clear()
+                    st.success("KOATD database rebuilt.")
+                    st.rerun()
+            else:
+                st.caption(
+                    "No bundled `koatd_scores_export.csv` + `koatd_tournament_players_export.csv` next to this app — "
+                    "re-import locally if you need a fresh offline build."
+                )
+        elif not off_path.is_file():
             st.markdown(
                 "**Streamlit Cloud** only sees files pushed to GitHub. "
                 "`offline_koatd.sqlite3` is gitignored locally, so the hosted app never receives it unless you rebuild on Cloud "
@@ -723,11 +828,17 @@ If `KOOL_CLOUD_AUTO_BOOTSTRAP` is `true`, automation runs **once per Cloud sandb
                     "```\nPYTHONPATH=src python -m kool_elo.import_koatd_offline --overwrite\n"
                     "PYTHONPATH=src python -m kool_elo.compute_elo --db data/offline_koatd.sqlite3\n```"
                 )
+                st.caption(
+                    "Tip: switch **Data source** to **KOATD offline snapshot** after building to browse that dataset globally."
+                )
         else:
             _apply_elo_migrations(off_path)
             offline_key = str(off_path)
             offline_players = fetch_players(offline_key)
             offline_games = fetch_games_agg(offline_key)
+            st.caption(
+                "Peek at KOATD without switching the global source, or switch **Data source** above to browse KOATD everywhere."
+            )
             c1, c2, c3 = st.columns(3)
             c1.metric("Players", f"{len(offline_players):,}")
             c2.metric("Games", f"{int(offline_games['games']):,}")
