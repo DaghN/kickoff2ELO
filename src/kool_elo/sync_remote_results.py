@@ -24,6 +24,7 @@ from typing import Any
 from kool_elo.config import (
     DATA_DIR,
     DEFAULT_JSON_PATH,
+    ESTABLISHED_MASS_RECALIBRATE_EVERY_N_GAMES,
     PROJECT_ROOT,
     REMOTE_RESULTS_MANIFEST_PATH,
     resolved_remote_results_url,
@@ -205,17 +206,34 @@ def sync_remote_results(
     )
 
 
-def apply_import_and_elo() -> None:
+def apply_import_and_elo(db_path: Path | None = None) -> None:
+    target = DEFAULT_DB_PATH if db_path is None else db_path
     env = os.environ.copy()
     env["PYTHONPATH"] = str(PROJECT_ROOT / "src")
     subprocess.run(
-        [sys.executable, "-m", "kool_elo.import_matches", "--overwrite"],
+        [
+            sys.executable,
+            "-m",
+            "kool_elo.import_matches",
+            "--overwrite",
+            "--db",
+            str(target),
+        ],
         cwd=str(PROJECT_ROOT),
         env=env,
         check=True,
     )
     subprocess.run(
-        [sys.executable, "-m", "kool_elo.compute_elo", "--quiet"],
+        [
+            sys.executable,
+            "-m",
+            "kool_elo.compute_elo",
+            "--db",
+            str(target),
+            "--quiet",
+            "--established-mass-recalibrate-every",
+            str(ESTABLISHED_MASS_RECALIBRATE_EVERY_N_GAMES),
+        ],
         cwd=str(PROJECT_ROOT),
         env=env,
         check=True,

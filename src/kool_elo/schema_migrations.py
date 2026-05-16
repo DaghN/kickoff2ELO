@@ -66,9 +66,38 @@ def ensure_peak_tracking_columns(conn: sqlite3.Connection) -> None:
         )
 
 
+def ensure_last_game_at_column(conn: sqlite3.Connection) -> None:
+    """Last game timestamp — always derivable from ``games`` (see ``refresh_last_game_at``)."""
+
+    cols = _table_columns(conn, "players")
+    if "last_game_at" not in cols:
+        conn.execute("ALTER TABLE players ADD COLUMN last_game_at TEXT;")
+
+
+def refresh_last_game_at(conn: sqlite3.Connection) -> None:
+    """
+    Set ``players.last_game_at`` to each player's latest ``games.start_time``.
+
+    ``games`` is the source of truth; call after imports or Elo replay.
+    """
+
+    conn.execute(
+        """
+        UPDATE players
+           SET last_game_at = (
+                 SELECT MAX(g.start_time)
+                   FROM games g
+                  WHERE g.player_a_id = players.player_id
+                     OR g.player_b_id = players.player_id
+               );
+        """
+    )
+
+
 def ensure_elo_schema(conn: sqlite3.Connection) -> None:
     """Convenience rollup for tools that mutate ratings."""
 
     ensure_stage2_rating_columns(conn)
     ensure_provisional_columns(conn)
     ensure_peak_tracking_columns(conn)
+    ensure_last_game_at_column(conn)

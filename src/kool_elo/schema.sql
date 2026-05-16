@@ -9,7 +9,8 @@ CREATE TABLE IF NOT EXISTS players (
     rating         REAL    NOT NULL DEFAULT 1600,
     games_played   INTEGER NOT NULL DEFAULT 0 CHECK (games_played >= 0),
     peak_rating    REAL,
-    peak_rating_at TEXT
+    peak_rating_at TEXT,
+    last_game_at   TEXT    -- derived from games, ISO-like 'YYYY-MM-DD HH:MM:SS'
 );
 
 CREATE TABLE IF NOT EXISTS games (

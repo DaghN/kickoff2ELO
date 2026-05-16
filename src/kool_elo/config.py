@@ -13,7 +13,8 @@ DATA_DIR = PROJECT_ROOT / "data"
 DEFAULT_JSON_PATH = PROJECT_ROOT / "retro_results.json"
 DEFAULT_DB_PATH = DATA_DIR / "retro_elo.sqlite3"
 
-# KO2 community JSON dump. `?Q=` limits what the server returns — change or clear via env.
+# KO2 community JSON dump. Joshua scopes rows via `Q=`; defaults here match the known-working local URL (`Q=Dagh`).
+# Override any time with `KOOL_REMOTE_RESULTS_URL` (shell or Streamlit Secrets) if you deploy elsewhere.
 DEFAULT_REMOTE_RESULTS_URL = "https://joshua.kickoff2.net/db/AllResultsDump.php?Q=Dagh"
 REMOTE_RESULTS_MANIFEST_PATH = DATA_DIR / "results_sync_manifest.json"
 
@@ -30,3 +31,12 @@ PROVISIONAL_GAMES_FULL_THRESHOLD = 20
 PROVISIONAL_K_CEILING_ABOVE_RATING = (
     1900.0  # strict `>`; cap applies only while still provisional.
 )
+# True: forum-style per-player K (provisional A/B ramps in ``elo_core``).
+# False: both players use ``K_FACTOR`` (``--k``) every game.
+PROVISIONAL_DUAL_K_ENABLED = False
+
+# 0 = off. When N > 0, after every N **globally** processed games in replay, apply the
+# same additive delta to every player with games >= PROVISIONAL_GAMES_FULL_THRESHOLD
+# so their mean rating equals ``BASE_RATING``. Provisional players unchanged.
+# **Streamlit / sync** pass this through to ``compute_elo``; ``0`` disables shifts.
+ESTABLISHED_MASS_RECALIBRATE_EVERY_N_GAMES = 0

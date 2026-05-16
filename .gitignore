@@ -15,6 +15,7 @@ retro_results.json
 /data/*.sqlite3
 /data/*.db
 /data/results_sync_manifest.json
+/data/.cloud_auto_bootstrap_attempted
 
 # Jupyter / tooling
 .ipynb_checkpoints/
@@ -29,3 +30,11 @@ retro_results.json
 *.swp
 .DS_Store
 Thumbs.db
+
+# Secrets & local overrides
+.env
+.env.*
+!.env.example
+
+# Streamlit (never commit populated secrets.toml)
+.streamlit/secrets.toml

@@ -1,0 +1,7 @@
+# Project-wide defaults for Streamlit (local + Community Cloud).
+
+[runner]
+fastReruns = true
+
+[browser]
+gatherUsageStats = false

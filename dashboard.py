@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+from streamlit.errors import StreamlitSecretNotFoundError
 
 _ROOT = Path(__file__).resolve().parent
 _SRC = _ROOT / "src"
@@ -25,15 +26,63 @@ if str(_SRC) not in sys.path:
 
 from kool_elo.config import (
     BASE_RATING,
+    DATA_DIR,
     DEFAULT_DB_PATH,
     DEFAULT_JSON_PATH,
+    ESTABLISHED_MASS_RECALIBRATE_EVERY_N_GAMES,
     K_FACTOR,
+    PROVISIONAL_DUAL_K_ENABLED,
     PROVISIONAL_GAMES_FULL_THRESHOLD,
     PROJECT_ROOT,
     resolved_remote_results_url,
 )
 from kool_elo.schema_migrations import ensure_elo_schema
 from kool_elo.sync_remote_results import apply_import_and_elo, sync_remote_results
+
+
+def _mirror_streamlit_secrets_to_environment() -> None:
+    """Expose selected Streamlit Secrets as env vars so CLI subprocess pipelines see them."""
+
+    mirrored = (
+        "KOOL_REMOTE_RESULTS_URL",
+        "KOOL_AUTO_SYNC_ON_START",
+        "KOOL_AUTO_SYNC_APPLY",
+        "KOOL_CLOUD_AUTO_BOOTSTRAP",
+        "KOOL_RESULTS_FETCH_TIMEOUT",
+    )
+    try:
+        sec = st.secrets
+        for key in mirrored:
+            if key not in os.environ and key in sec:
+                value = sec[key]
+                if value is None or str(value).strip() == "":
+                    continue
+                os.environ[key] = str(value).strip()
+    except StreamlitSecretNotFoundError:
+        # No secrets.toml locally or on stripped-down runs — defaults + plain env suffice.
+        return
+    except (AttributeError, FileNotFoundError, RuntimeError, OSError):
+        return
+
+
+def _bootstrap_db_from_remote(
+    *,
+    db_path: Path,
+    json_out: Path,
+    dump_url: str,
+) -> None:
+    sync_remote_results(
+        url=dump_url.strip(),
+        out_path=json_out,
+        replace_local=False,
+        force_fetch=True,
+    )
+    if not json_out.is_file():
+        raise RuntimeError("Bootstrap finished but retro_results.json is still missing.")
+
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    apply_import_and_elo(db_path=db_path)
+    _apply_elo_migrations(db_path)
 
 
 def _apply_elo_migrations(sqlite_path: Path) -> None:
@@ -157,7 +206,13 @@ def recent_games(db_path_str: str, limit: int = 200) -> pd.DataFrame:
         conn.close()
 
 
-def run_compute_elo(db_path: Path, base: float, k: float) -> None:
+def run_compute_elo(
+    db_path: Path,
+    base: float,
+    k: float,
+    *,
+    use_provisional_dual_k: bool,
+) -> None:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(PROJECT_ROOT / "src")
     cmd = [
@@ -171,7 +226,13 @@ def run_compute_elo(db_path: Path, base: float, k: float) -> None:
         "--k",
         str(k),
         "--quiet",
+        "--established-mass-recalibrate-every",
+        str(ESTABLISHED_MASS_RECALIBRATE_EVERY_N_GAMES),
     ]
+    if use_provisional_dual_k:
+        cmd.append("--provisional-dual-k")
+    else:
+        cmd.append("--symmetric-k")
     subprocess.run(cmd, cwd=str(PROJECT_ROOT), env=env, check=True)
 
 
@@ -181,23 +242,77 @@ def _env_truthy(name: str) -> bool:
 
 def main() -> None:
     st.set_page_config(page_title="Kool Elo", layout="wide")
+    _mirror_streamlit_secrets_to_environment()
     st.title("Kool Elo — Kick Off 2 ratings")
 
     st.sidebar.header("Data")
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    json_out = DEFAULT_JSON_PATH.resolve()
+
     db_default = str(DEFAULT_DB_PATH.resolve())
     db_input = st.sidebar.text_input("SQLite database", value=db_default)
     db_path = Path(db_input).expanduser().resolve()
 
     if not db_path.is_file():
-        st.error(
-            f"Database file not found: `{db_path}`. "
-            "Run `python -m kool_elo.import_matches --overwrite` first, then `compute_elo`."
+        st.warning(
+            f"SQLite not found yet (`{db_path}`). Streamlit Cloud starts without your local `data/*.sqlite3`; "
+            "pull the JSON once and replay into SQLite below."
         )
+        boot_input = st.text_input(
+            "Community dump URL (bootstrap)",
+            value=resolved_remote_results_url(),
+            help="Override with env `KOOL_REMOTE_RESULTS_URL` or Streamlit secret of the same name.",
+            key="_kool_cloud_bootstrap_dump_url",
+        )
+        tip = """
+**First‑time bootstrap** downloads the full community JSON and replays imports + Elo (may take minutes and can hit hosted timeouts on very large payloads).
+
+Suggested Cloud setup: paste the validated dump URL under **Secrets** as `KOOL_REMOTE_RESULTS_URL`.
+
+If `KOOL_CLOUD_AUTO_BOOTSTRAP` is `true`, automation runs **once per Cloud sandbox** (`data/.cloud_auto_bootstrap_attempted` keeps every new browser tab from restarting the downloader). Delete that file if you need to rerun automation without pushing a redeploy—the Community Cloud filesystem is short-lived anyway.
+"""
+        st.markdown(tip)
+
+        boot_attempt_flag = DATA_DIR / ".cloud_auto_bootstrap_attempted"
+        if _env_truthy("KOOL_CLOUD_AUTO_BOOTSTRAP") and not boot_attempt_flag.is_file():
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            boot_attempt_flag.write_text("", encoding="utf-8")
+            try:
+                with st.spinner("KOOL_CLOUD_AUTO_BOOTSTRAP: fetching JSON → SQLite …"):
+                    _bootstrap_db_from_remote(
+                        db_path=db_path,
+                        json_out=json_out,
+                        dump_url=boot_input,
+                    )
+            except Exception as exc:  # noqa: BLE001 — user-facing onboarding
+                st.error(
+                    f"Automatic bootstrap failed: {exc}. Use the manual button below, tweak Secrets/timeouts, "
+                    "or delete `data/.cloud_auto_bootstrap_attempted` once upstream issues are cleared."
+                )
+            else:
+                st.cache_data.clear()
+                st.success("SQLite ready.")
+                st.rerun()
+
+        if st.button("Bootstrap SQLite from community dump", type="primary"):
+            try:
+                with st.spinner("Downloading + import + replay — patience …"):
+                    _bootstrap_db_from_remote(
+                        db_path=db_path,
+                        json_out=json_out,
+                        dump_url=boot_input,
+                    )
+            except Exception as exc:  # noqa: BLE001 — surface full stack trace in expander optional
+                st.exception(exc)
+                st.stop()
+            st.cache_data.clear()
+            st.success("SQLite ready.")
+            st.rerun()
+
         st.stop()
 
     _apply_elo_migrations(db_path)
-
-    json_out = DEFAULT_JSON_PATH.resolve()
 
     if _env_truthy("KOOL_AUTO_SYNC_ON_START") and not st.session_state.get(
         "_kool_remote_autosync_once"
@@ -222,7 +337,7 @@ def main() -> None:
                     )
                 ):
                     with st.spinner("import_matches + compute_elo …"):
-                        apply_import_and_elo()
+                        apply_import_and_elo(db_path=db_path)
                 elif not _env_truthy("KOOL_AUTO_SYNC_APPLY"):
                     st.session_state["_kool_json_refresh_pending"] = True
                 st.cache_data.clear()
@@ -240,9 +355,7 @@ def main() -> None:
     dump_url = st.sidebar.text_input(
         "Dump URL",
         value=resolved_remote_results_url(),
-        help=(
-            "KOOL_REMOTE_RESULTS_URL env overrides the default; built-in default uses ?Q=Dagh on joshua.kickoff2.net."
-        ),
+        help="Override with env `KOOL_REMOTE_RESULTS_URL` or Streamlit secret of the same name.",
     )
     replace_local = st.sidebar.checkbox(
         "Replace local JSON (remote only)",
@@ -296,7 +409,7 @@ def main() -> None:
                     if rebuild_after_sync and changed_local:
                         with st.spinner("import_matches + compute_elo …"):
                             try:
-                                apply_import_and_elo()
+                                apply_import_and_elo(db_path=db_path)
                             except subprocess.CalledProcessError:
                                 st.sidebar.error("Rebuild pipeline failed.")
                                 st.stop()
@@ -308,19 +421,41 @@ def main() -> None:
 
     st.sidebar.markdown("---")
     st.sidebar.subheader("Recompute Elo")
-    st.sidebar.caption(
-        (
-            "Replays chronologically using the provisional dual‑K scheme (automatic ramp "
-            "with opponent damping — see `elo_core.py`). Ratings in SQLite remain numeric; the UI "
-            f"shows a trailing **`?`** while `games_played` stays below `{PROVISIONAL_GAMES_FULL_THRESHOLD}`."
-        )
+    if "_kool_provisional_dual_k" not in st.session_state:
+        st.session_state["_kool_provisional_dual_k"] = PROVISIONAL_DUAL_K_ENABLED
+    use_dual_k = st.sidebar.checkbox(
+        "Provisional dual‑K (forum per‑player ramps)",
+        key="_kool_provisional_dual_k",
+        help=(
+            "If checked, each seat gets its own K from the provisional ladders in `elo_core.py`. "
+            "If unchecked, both players share the sidebar K-factor every match."
+        ),
     )
+    if use_dual_k:
+        st.sidebar.caption(
+            "Next replay: **dual‑K** — automatic ramps + opponent damping (see `elo_core.py`). "
+            f"`?` markers still indicate `games_played` < `{PROVISIONAL_GAMES_FULL_THRESHOLD}`."
+        )
+    else:
+        st.sidebar.caption(
+            "Next replay: **symmetric K** — same `K-factor` below for **both** players every game."
+        )
+    if ESTABLISHED_MASS_RECALIBRATE_EVERY_N_GAMES > 0:
+        st.sidebar.caption(
+            f"Established mean recalibration **on**: every **{ESTABLISHED_MASS_RECALIBRATE_EVERY_N_GAMES}** games "
+            "(see `ESTABLISHED_MASS_RECALIBRATE_EVERY_N_GAMES` in `config.py`; set `0` to disable)."
+        )
     base = float(st.sidebar.number_input("Base rating", value=float(BASE_RATING), step=1.0))
     k_factor = float(st.sidebar.number_input("K-factor", value=float(K_FACTOR), step=1.0))
     if st.sidebar.button("Run full replay", type="primary"):
         with st.spinner("Replaying every game — this can take a few seconds…"):
             try:
-                run_compute_elo(db_path, base, k_factor)
+                run_compute_elo(
+                    db_path,
+                    base,
+                    k_factor,
+                    use_provisional_dual_k=use_dual_k,
+                )
             except subprocess.CalledProcessError as exc:
                 st.sidebar.error(f"`compute_elo` failed (exit {exc.returncode}).")
                 st.stop()

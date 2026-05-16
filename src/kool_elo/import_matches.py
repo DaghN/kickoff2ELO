@@ -22,6 +22,7 @@ from pathlib import Path
 import pandas as pd
 
 from kool_elo.config import DEFAULT_DB_PATH, DEFAULT_JSON_PATH
+from kool_elo.schema_migrations import ensure_elo_schema, refresh_last_game_at
 
 
 def _project_sqlite_statements(schema_path: Path) -> list[str]:
@@ -173,6 +174,8 @@ def import_to_sqlite(
         apply_schema(conn, schema_path)
         players.to_sql("players", conn, if_exists="append", index=False)
         games.to_sql("games", conn, if_exists="append", index=False)
+        ensure_elo_schema(conn)
+        refresh_last_game_at(conn)
         conn.commit()
     finally:
         conn.close()
