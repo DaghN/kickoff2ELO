@@ -1,6 +1,6 @@
 # Kool Elo
 
-Python + SQLite Elo ratings tooling and a **[Streamlit](https://streamlit.io/)** explorer for Kick Off 2 retro head-to-head match dumps.
+GitHub: **[DaghN/kickoff2ELO](https://github.com/DaghN/kickoff2ELO)** — Python + SQLite Elo ratings tooling and a **[Streamlit](https://streamlit.io/)** explorer for Kick Off 2 retro head-to-head match dumps.
 
 ---
 
@@ -92,7 +92,7 @@ For a hardened long-running PoC you'd typically host on a VPS or wire object sto
 
 | Variable | Meaning |
 |-----------|---------|
-| `KOOL_REMOTE_RESULTS_URL` | Overrides default JSON dump URL everywhere (sidebar + pipelines). |
+| `KOOL_REMOTE_RESULTS_URL` | Overrides default JSON dump everywhere (sidebar + pipelines). |
 | `KOOL_AUTO_SYNC_ON_START` | `true` ⇒ download-hash check once at boot. |
 | `KOOL_AUTO_SYNC_APPLY` | Paired flag ⇒ run import+Elo rebuild when hashes differ. |
 | `KOOL_CLOUD_AUTO_BOOTSTRAP` | When SQLite is missing + flag is `true`, attempt once per dyno/`data/` folder guarded by **`data/.cloud_auto_bootstrap_attempted`**. Delete that file manually to retry automation after fixing upstream timeouts. |
